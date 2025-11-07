@@ -53,3 +53,14 @@ accessories:
         - POSTGRES_PASSWORD
     volumes:
       - db:/var/lib/postgresql/data
+
+  # minio:
+  #   image: minio/minio:latest
+  #   host: api.bucketbird.xyz
+  #   cmd: server /data --console-address ":9001"
+  #   env:
+  #     secret:
+  #       - MINIO_ROOT_USER
+  #       - MINIO_ROOT_PASSWORD
+  #   volumes:
+  #     - bucketbird_minio:/data
