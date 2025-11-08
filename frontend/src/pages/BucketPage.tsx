@@ -664,7 +664,7 @@ const BucketPage = () => {
     createFolderMutation.isPending || deleteObjectsMutation.isPending || renameObjectMutation.isPending || isUploading
 
   return (
-    <AppShell searchPlaceholder="Search files and folders..." searchValue={searchQuery} onSearchChange={setSearchQuery} sidebarVariant="bucket">
+    <AppShell searchPlaceholder="Search files and folders..." searchValue={searchQuery} onSearchChange={setSearchQuery}>
       <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileInputChange} />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-3xl font-bold text-slate-900 dark:text-white">{bucketMeta?.name ?? bucketId}</h1>

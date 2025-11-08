@@ -13,7 +13,6 @@ type AppShellProps = {
   onSearchChange?: (value: string) => void
   topRight?: ReactNode
   contentClassName?: string
-  sidebarVariant?: 'dashboard' | 'bucket' | 'settings'
 }
 
 export const AppShell = ({
@@ -23,7 +22,6 @@ export const AppShell = ({
   onSearchChange,
   topRight,
   contentClassName,
-  sidebarVariant = 'dashboard',
 }: AppShellProps) => {
   const { user } = useAuth()
   const isDemo = user?.isReadonly || false
@@ -31,7 +29,7 @@ export const AppShell = ({
   return (
     <>
       <div className="flex min-h-screen w-full bg-gradient-to-br from-background-light via-white to-background-muted text-slate-900 dark:bg-background-dark dark:text-white">
-        <AppSidebar variant={sidebarVariant} />
+        <AppSidebar />
         <div className="flex flex-1 flex-col overflow-hidden">
           <TopBar searchPlaceholder={searchPlaceholder} searchValue={searchValue} onSearchChange={onSearchChange} rightSection={topRight} />
           {isDemo && (
