@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import { ThemeProvider } from '../components/theme/ThemeProvider'
 import { AuthProvider } from '../contexts/AuthContext'
-import { BucketModalProvider } from '../contexts/BucketModalContext'
+import { BucketModalProvider } from '../contexts/BucketModalProvider'
 
 const queryClient = new QueryClient({
   defaultOptions: {

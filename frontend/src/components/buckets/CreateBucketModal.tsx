@@ -4,7 +4,7 @@ import Button from '../ui/Button'
 import { useCredentials } from '../../hooks/useCredentials'
 import { useCredentialBuckets } from '../../hooks/useCredentialBuckets'
 import { useCreateBucket } from '../../hooks/useBucketMutations'
-import { useBucketModal } from '../../contexts/BucketModalContext'
+import { useBucketModal } from '../../hooks/useBucketModal'
 
 export const CreateBucketModal = () => {
   const { showCreateModal, closeCreateModal } = useBucketModal()

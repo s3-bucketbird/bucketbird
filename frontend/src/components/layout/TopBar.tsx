@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import ThemeToggle from '../theme/ThemeToggle'
-import { useTheme } from '../theme/ThemeProvider'
+import { useTheme } from '../../hooks/useTheme'
 import { useAuth } from '../../contexts/useAuth'
 
 type TopBarProps = {

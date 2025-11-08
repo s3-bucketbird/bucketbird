@@ -15,7 +15,7 @@ import {
   useTestCredential,
 } from '../hooks/useCredentialMutations'
 import { useAuth } from '../contexts/useAuth'
-import { useTheme } from '../components/theme/ThemeProvider'
+import { useTheme } from '../hooks/useTheme'
 
 type FormMode = 'create' | 'edit' | null
 type SelectedCredential = {

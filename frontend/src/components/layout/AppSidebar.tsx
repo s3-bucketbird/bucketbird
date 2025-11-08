@@ -2,15 +2,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link, NavLink, useLocation, useParams } from 'react-router-dom'
 
 import { useBuckets } from '../../hooks/useBuckets'
-import { useBucketModal } from '../../contexts/BucketModalContext'
+import { useBucketModal } from '../../hooks/useBucketModal'
 
-type SidebarVariant = 'dashboard' | 'bucket' | 'settings'
-
-type AppSidebarProps = {
-  variant?: SidebarVariant
-}
-
-export const AppSidebar = ({ variant: _variant = 'dashboard' }: AppSidebarProps) => {
+export const AppSidebar = () => {
   const location = useLocation()
   const { bucketId } = useParams<{ bucketId: string }>()
   const { data: buckets = [] } = useBuckets()

@@ -185,12 +185,13 @@ const BucketPage = () => {
         case 'name':
           comparison = a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
           break
-        case 'modified':
+        case 'modified': {
           const aTime = a.lastModified && a.lastModified !== '0001-01-01T00:00:00Z' ? new Date(a.lastModified).getTime() : 0
           const bTime = b.lastModified && b.lastModified !== '0001-01-01T00:00:00Z' ? new Date(b.lastModified).getTime() : 0
           comparison = aTime - bTime
           break
-        case 'size':
+        }
+        case 'size': {
           // Extract numeric value from size string (e.g., "1.2 MB" -> 1200000)
           const parseSize = (sizeStr: string): number => {
             if (!sizeStr || sizeStr.trim() === '') return 0
@@ -203,11 +204,13 @@ const BucketPage = () => {
           }
           comparison = parseSize(a.size) - parseSize(b.size)
           break
-        case 'type':
+        }
+        case 'type': {
           const aExt = getFileExtension(a.name)
           const bExt = getFileExtension(b.name)
           comparison = aExt.localeCompare(bExt)
           break
+        }
       }
 
       return sortDirection === 'asc' ? comparison : -comparison

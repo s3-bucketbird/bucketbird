@@ -1,15 +1,9 @@
 import type { ReactNode } from 'react'
-import { createContext, useContext, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+
+import { ThemeContext, type ThemeContextValue } from '../../contexts/ThemeContext'
 
 type Theme = 'light' | 'dark'
-
-type ThemeContextValue = {
-  theme: Theme
-  setTheme: (theme: Theme) => void
-  toggleTheme: () => void
-}
-
-const ThemeContext = createContext<ThemeContextValue | undefined>(undefined)
 
 const THEME_STORAGE_KEY = 'bucketbird-theme'
 
@@ -61,12 +55,4 @@ export const ThemeProvider = ({ children }: ThemeProviderProps) => {
   )
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>
-}
-
-export const useTheme = () => {
-  const context = useContext(ThemeContext)
-  if (!context) {
-    throw new Error('useTheme must be used within a ThemeProvider')
-  }
-  return context
 }

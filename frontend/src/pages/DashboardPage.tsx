@@ -5,7 +5,7 @@ import AppShell from '../components/layout/AppShell'
 import Button from '../components/ui/Button'
 import { useBuckets } from '../hooks/useBuckets'
 import { useDeleteBucket, useRecalculateBucketSize } from '../hooks/useBucketMutations'
-import { useBucketModal } from '../contexts/BucketModalContext'
+import { useBucketModal } from '../hooks/useBucketModal'
 import { ConfirmDialog } from '../components/modals/ConfirmDialog'
 import { AlertDialog } from '../components/modals/AlertDialog'
 
