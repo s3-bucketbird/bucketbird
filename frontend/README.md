@@ -1,14 +1,14 @@
-# tDrive Frontend
+# BucketBird Frontend
 
-tDrive's frontend is a React 19 + TypeScript single-page application scaffolded with Vite and styled with Tailwind CSS. It implements the S3 drive experience defined in the design templates and is ready to integrate with the Go backend.
+BucketBird's frontend is a React 19 + TypeScript single-page application scaffolded with Vite and styled with Tailwind CSS. It provides a modern S3-compatible storage console interface that integrates with the Go backend.
 
 ## Stack
 
 - React 19 with Vite for fast local development
 - TypeScript with strict settings and React Router for routing
-- Tailwind CSS (v3) with design tokens matching the supplied templates
+- Tailwind CSS (v3) with custom design tokens
 - @tanstack/react-query for data fetching and caching
-- Lightweight mock API layer (`src/api`) to unblock UI work before the backend is ready
+- Integrated with Go backend API for real-time bucket and object management
 - Dark/light theme support with a custom ThemeProvider and Material Symbols icons
 
 ## Getting Started
@@ -37,21 +37,24 @@ frontend/
 └── index.html             # Font/material icon setup and theme bootstrapping
 ```
 
-## Mock Data
-
-`src/api/mockData.ts` provides placeholder buckets, objects, credentials, and user profile data. Hooks in `src/hooks` expose these datasets via React Query so the UI behaves as if it were connected to a backend. Replace these implementations with real API calls as services come online.
-
 ## Theming
 
-The UI respects a `tdrive-theme` localStorage key and the user's OS preference. `ThemeProvider` handles toggling dark/light mode and `ThemeToggle` inside the top bar exposes the switch to users.
+The UI supports dark and light themes, respecting the user's OS preference by default. The `ThemeProvider` handles theme toggling and state management. Users can switch themes via the settings icon in the top bar on desktop or the menu on mobile.
 
-## Next Steps for Backend Integration
+## Features
 
-1. **API Contracts** – Define REST/GraphQL responses for buckets, objects, credentials, and profile settings. Replace mock implementations in `src/api/client.ts` with real HTTP calls.
-2. **Authentication Flow** – Wire the login/register screen to session endpoints (supporting TOTP/SSO later). Add route guards to redirect unauthenticated users.
-3. **Mutations** – Implement create/update/delete mutations for buckets, objects, and credentials. Use React Query `useMutation` hooks and optimistic updates where applicable.
-4. **Error & Loading States** – Expand loading indicators and surface server errors via toasts/snackbars once backend endpoints are available.
-5. **Share Links & Activity** – Extend placeholder pages (Shared, Recent, Trash) with backend-driven data and actions.
-6. **CI & Tests** – Add component tests (React Testing Library) and end-to-end coverage (Playwright) once data flows are stable.
+- **Bucket Management** – Create, view, and manage S3-compatible buckets across multiple storage providers
+- **File Operations** – Upload, download, rename, delete, and preview files with drag-and-drop support
+- **Folder Navigation** – Browse folder hierarchies with breadcrumb navigation
+- **Multi-Provider Support** – Connect to AWS S3, MinIO, and other S3-compatible storage services
+- **Credential Management** – Securely store and manage multiple storage credentials
+- **User Profile** – Manage account settings, preferences, and password
+- **Theme Support** – Switch between light and dark themes
+- **Search** – Search for files and folders within buckets
+- **File Preview** – Preview images, videos, audio, PDFs, and text files directly in the browser
+- **Bulk Operations** – Select and delete multiple files at once
+- **Responsive Design** – Works on desktop and mobile devices
 
-With the frontend scaffold in place, the next milestone is to stand up the Go backend APIs, after which we can point the React Query hooks at real endpoints and iterate on the upload/download workflows.
+## Development
+
+The frontend communicates with the Go backend API via REST endpoints. All API calls are made through the `src/api/client.ts` module, with React Query handling caching and state management through hooks in `src/hooks`.

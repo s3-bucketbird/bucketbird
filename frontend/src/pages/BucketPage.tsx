@@ -742,7 +742,7 @@ const BucketPage = () => {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-start gap-3">
               <div
-                className={`flex h-12 w-12 items-center justify-center rounded-full transition-colors ${
+                className={`flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full transition-colors ${
                   showUploadDropzone
                     ? 'bg-primary/15 text-primary dark:bg-primary/25 dark:text-white'
                     : 'bg-white text-primary dark:bg-slate-800 dark:text-white/80'

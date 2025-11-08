@@ -165,10 +165,24 @@ export const TopBar = ({
   onSearchChange,
   rightSection,
 }: TopBarProps) => {
+  const navigate = useNavigate()
   const renderedRightSection = rightSection ?? <DefaultRightSection />
 
   return (
     <header className="flex h-16 flex-shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 text-slate-700 shadow-sm dark:border-slate-800 dark:bg-[#111a22] dark:text-slate-200 md:px-8">
+      {/* Mobile Logo */}
+      <button
+        onClick={() => navigate('/dashboard')}
+        className="flex items-center md:hidden"
+        aria-label="Go to dashboard"
+      >
+        <img
+          src="/bucketbird.png"
+          alt="BucketBird"
+          className="size-10 rounded-lg bg-white/80 object-contain p-1 shadow-sm dark:bg-white/10"
+        />
+      </button>
+
       <div className="flex flex-1 md:max-w-lg">
         <label className="flex w-full flex-col">
           <div className="flex h-10 w-full items-stretch rounded-lg bg-transparent">

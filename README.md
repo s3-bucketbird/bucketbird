@@ -274,7 +274,7 @@ frontend/
 │   └── types/             # TypeScript type definitions
 └── public/                # Static assets
 
-config/                     # Configuration files
+config/                     # Kamal deployment configs
 docker-compose.yml          # Docker compose orchestration
 ```
 
@@ -333,4 +333,4 @@ Contributions are welcome! Please feel free to submit issues and pull requests.
 
 ## License
 
-This project is available for use under standard open source practices.
+This project is licensed under the MIT License.

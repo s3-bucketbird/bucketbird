@@ -302,6 +302,14 @@ const SettingsPage = () => {
       </aside>
 
       <main className="flex-1 px-4 py-6 sm:px-8 lg:px-12 lg:py-10">
+        {/* Mobile Back Button */}
+        <Link
+          to="/dashboard"
+          className="mb-4 flex items-center gap-2 text-sm font-medium text-slate-600 transition-colors hover:text-primary dark:text-slate-300 dark:hover:text-primary md:hidden"
+        >
+          <span className="material-symbols-outlined text-xl">arrow_back</span>
+          <span>Back to dashboard</span>
+        </Link>
         <div className="mx-auto flex w-full max-w-4xl flex-col gap-10">
           {(profileLoading || credentialsLoading) && (
             <div className="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">

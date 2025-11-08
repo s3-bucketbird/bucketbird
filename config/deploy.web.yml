@@ -2,6 +2,7 @@
 service: bucketbird
 
 # Name of the container image.
+# To deploy: kamal deploy -d web [--version 0.1.0]
 image: s3-bucketbird/bucketbird-web
 
 volumes:
