@@ -53,22 +53,22 @@ a:focus {
 .brand {
   display: flex;
   align-items: center;
-  gap: 0.85rem;
+  gap: 1rem;
   font-weight: 600;
 }
 
 .brand-logo {
-  width: 56px;
-  height: 56px;
-  border-radius: 14px;
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
+  width: 72px;
+  height: 72px;
+  border-radius: 16px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
   background: #fff;
-  padding: 0.3rem;
+  padding: 0.4rem;
 }
 
 .brand-title {
   display: block;
-  font-size: 1.15rem;
+  font-size: 1.3rem;
 }
 
 .brand-tagline {
