@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 
-import { api, type CreateFolderInput, type RenameObjectInput } from '../api/client'
+import { api, type CopyObjectInput, type CreateFolderInput, type RenameObjectInput } from '../api/client'
 
 export const useCreateFolder = (bucketId: string, prefix: string) => {
   const queryClient = useQueryClient()
@@ -29,6 +29,17 @@ export const useRenameObject = (bucketId: string, prefix: string) => {
 
   return useMutation({
     mutationFn: (input: RenameObjectInput) => api.renameObject(bucketId, input),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['bucketObjects', bucketId, prefix] })
+    },
+  })
+}
+
+export const useCopyObject = (bucketId: string, prefix: string) => {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (input: CopyObjectInput) => api.copyObject(bucketId, input),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['bucketObjects', bucketId, prefix] })
     },

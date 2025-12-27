@@ -254,7 +254,7 @@ func (s *BucketService) UploadObject(ctx context.Context, bucketID, userID uuid.
 		return err
 	}
 
-	if err := store.PutObject(ctx, bucketName, key, body, contentType); err != nil {
+	if err := store.PutObject(ctx, bucketName, key, body, contentType, nil); err != nil {
 		return err
 	}
 
@@ -490,8 +490,33 @@ func (s *BucketService) RenameObject(ctx context.Context, bucketID, userID uuid.
 		return nil, err
 	}
 
+	if sourceKey == destinationKey {
+		return &OperationResult{
+			Success: true,
+			Message: "Object already has that name",
+		}, nil
+	}
+
+	isFolder := strings.HasSuffix(sourceKey, "/")
+	if isFolder && !strings.HasSuffix(destinationKey, "/") {
+		destinationKey += "/"
+	}
+	if sourceKey == destinationKey {
+		return &OperationResult{
+			Success: true,
+			Message: "Object already has that name",
+		}, nil
+	}
+
 	// Check if it's a folder
-	if strings.HasSuffix(sourceKey, "/") {
+	if isFolder {
+		if strings.HasPrefix(destinationKey, sourceKey) {
+			return &OperationResult{
+				Success: false,
+				Message: "Cannot move a folder into itself",
+			}, fmt.Errorf("destination %s is inside source %s", destinationKey, sourceKey)
+		}
+
 		// It's a folder - list all objects with this prefix
 		objects, err := store.ListAllObjects(ctx, bucketName, sourceKey)
 		if err != nil {
@@ -501,7 +526,8 @@ func (s *BucketService) RenameObject(ctx context.Context, bucketID, userID uuid.
 			}, err
 		}
 
-		// Copy all objects from the folder
+		// Copy all objects from the folder and collect keys to delete afterwards
+		keysToDelete := make([]string, 0, len(objects)+1)
 		for _, obj := range objects {
 			if obj.Key == nil {
 				continue
@@ -517,6 +543,8 @@ func (s *BucketService) RenameObject(ctx context.Context, bucketID, userID uuid.
 					Message: fmt.Sprintf("failed to copy object %s: %v", oldKey, err),
 				}, err
 			}
+
+			keysToDelete = append(keysToDelete, oldKey)
 		}
 
 		// Copy the folder marker itself
@@ -527,8 +555,10 @@ func (s *BucketService) RenameObject(ctx context.Context, bucketID, userID uuid.
 			}, err
 		}
 
+		keysToDelete = append(keysToDelete, sourceKey)
+
 		// Delete original folder (this will use the updated DeleteObjects which handles folders)
-		if err := store.DeleteObjects(ctx, bucketName, []string{sourceKey}); err != nil {
+		if err := store.DeleteObjects(ctx, bucketName, keysToDelete); err != nil {
 			return &OperationResult{
 				Success: false,
 				Message: fmt.Sprintf("copied but failed to delete original: %v", err),
@@ -570,11 +600,61 @@ func (s *BucketService) CopyObject(ctx context.Context, bucketID, userID uuid.UU
 		return nil, err
 	}
 
-	if err := store.CopyObject(ctx, bucketName, sourceKey, destinationKey); err != nil {
+	isFolder := strings.HasSuffix(sourceKey, "/")
+	if isFolder && !strings.HasSuffix(destinationKey, "/") {
+		destinationKey += "/"
+	}
+	if sourceKey == destinationKey {
 		return &OperationResult{
 			Success: false,
-			Message: fmt.Sprintf("failed to copy object: %v", err),
-		}, err
+			Message: "Destination must be different from source",
+		}, fmt.Errorf("source and destination are identical")
+	}
+
+	if isFolder {
+		if strings.HasPrefix(destinationKey, sourceKey) {
+			return &OperationResult{
+				Success: false,
+				Message: "Cannot copy a folder into itself",
+			}, fmt.Errorf("destination %s is inside source %s", destinationKey, sourceKey)
+		}
+
+		objects, err := store.ListAllObjects(ctx, bucketName, sourceKey)
+		if err != nil {
+			return &OperationResult{
+				Success: false,
+				Message: fmt.Sprintf("failed to list folder contents: %v", err),
+			}, err
+		}
+
+		for _, obj := range objects {
+			if obj.Key == nil {
+				continue
+			}
+			oldKey := *obj.Key
+			newKey := strings.Replace(oldKey, sourceKey, destinationKey, 1)
+
+			if err := store.CopyObject(ctx, bucketName, oldKey, newKey); err != nil {
+				return &OperationResult{
+					Success: false,
+					Message: fmt.Sprintf("failed to copy object %s: %v", oldKey, err),
+				}, err
+			}
+		}
+
+		if err := store.CopyObject(ctx, bucketName, sourceKey, destinationKey); err != nil {
+			return &OperationResult{
+				Success: false,
+				Message: fmt.Sprintf("failed to copy folder marker: %v", err),
+			}, err
+		}
+	} else {
+		if err := store.CopyObject(ctx, bucketName, sourceKey, destinationKey); err != nil {
+			return &OperationResult{
+				Success: false,
+				Message: fmt.Sprintf("failed to copy object: %v", err),
+			}, err
+		}
 	}
 
 	return &OperationResult{

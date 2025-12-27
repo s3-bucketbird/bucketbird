@@ -8,7 +8,7 @@ import Button from '../components/ui/Button'
 import { api, type YouTubeImportProgress } from '../api/client'
 import { useBucketObjects } from '../hooks/useBucketObjects'
 import { useBuckets } from '../hooks/useBuckets'
-import { useCreateFolder, useDeleteObjects, useRenameObject } from '../hooks/useObjectActions'
+import { useCreateFolder, useDeleteObjects, useRenameObject, useCopyObject } from '../hooks/useObjectActions'
 import { ConfirmDialog } from '../components/modals/ConfirmDialog'
 import { PromptDialog } from '../components/modals/PromptDialog'
 import { AlertDialog } from '../components/modals/AlertDialog'
@@ -26,6 +26,18 @@ type BucketObject = {
 const ensureTrailingSlash = (value: string) => {
   if (value === '') return ''
   return value.endsWith('/') ? value : `${value}/`
+}
+
+const normalizeFolderInput = (value: string) => {
+  const trimmed = value.trim()
+  if (trimmed === '' || trimmed === '/') return ''
+  const withoutLeadingSlash = trimmed.replace(/^\/+/, '')
+  return ensureTrailingSlash(withoutLeadingSlash)
+}
+
+const buildDestinationKey = (prefix: string, obj: BucketObject) => {
+  const base = prefix ? `${prefix}${obj.name}` : obj.name
+  return obj.kind === 'folder' ? ensureTrailingSlash(base) : base
 }
 
 const parentPrefixOf = (key: string) => {
@@ -170,6 +182,8 @@ const BucketPage = () => {
     message?: string
     defaultValue?: string
     placeholder?: string
+    confirmText?: string
+    allowEmpty?: boolean
     onConfirm: (value: string) => void
   }>({ isOpen: false, title: '', onConfirm: () => {} })
 
@@ -192,6 +206,7 @@ const BucketPage = () => {
   const createFolderMutation = useCreateFolder(bucketId, prefix)
   const deleteObjectsMutation = useDeleteObjects(bucketId, prefix)
   const renameObjectMutation = useRenameObject(bucketId, prefix)
+  const copyObjectMutation = useCopyObject(bucketId, prefix)
 
   const {
     data: objects = [],
@@ -533,6 +548,7 @@ const BucketPage = () => {
       isOpen: true,
       title: 'Create New Folder',
       placeholder: 'Enter folder name',
+      confirmText: 'Create',
       onConfirm: async (name) => {
         try {
           await createFolderMutation.mutateAsync({ name, prefix })
@@ -577,21 +593,22 @@ const BucketPage = () => {
       setOpenObjectMenu(null)
       setPromptDialog({
         isOpen: true,
-        title: 'Rename',
-        message: `Rename "${obj.name}" to:`,
-        defaultValue: obj.name,
-        placeholder: 'Enter new name',
-        onConfirm: async (newName) => {
-          if (newName === obj.name) return
+      title: 'Rename',
+      message: `Rename "${obj.name}" to:`,
+      defaultValue: obj.name,
+      placeholder: 'Enter new name',
+      confirmText: 'Rename',
+      onConfirm: async (newName) => {
+        if (newName === obj.name) return
 
-          const parent = parentPrefixOf(obj.key)
-          let targetKey = `${parent}${newName}`
+        const parent = parentPrefixOf(obj.key)
+        let targetKey = `${parent}${newName}`
           if (obj.kind === 'folder') {
-            targetKey = ensureTrailingSlash(targetKey)
-          }
-          try {
-            await renameObjectMutation.mutateAsync({ sourceKey: obj.key, targetKey })
-          } catch (err) {
+          targetKey = ensureTrailingSlash(targetKey)
+        }
+        try {
+          await renameObjectMutation.mutateAsync({ sourceKey: obj.key, destinationKey: targetKey })
+        } catch (err) {
             setAlertDialog({
               isOpen: true,
               title: 'Rename Failed',
@@ -603,6 +620,102 @@ const BucketPage = () => {
       })
     },
     [renameObjectMutation],
+  )
+
+  const handleMoveObject = useCallback(
+    (obj: BucketObject) => {
+      setOpenObjectMenu(null)
+      setPromptDialog({
+        isOpen: true,
+        title: 'Move Item',
+        message: 'Enter the destination folder path. Leave blank to move to the root.',
+        defaultValue: parentPrefixOf(obj.key),
+        placeholder: 'photos/2024/',
+        confirmText: 'Move',
+        allowEmpty: true,
+        onConfirm: async (input) => {
+          const normalizedPrefix = normalizeFolderInput(input)
+          const destinationKey = buildDestinationKey(normalizedPrefix, obj)
+          if (destinationKey === obj.key) {
+            setAlertDialog({
+              isOpen: true,
+              title: 'Move Skipped',
+              message: 'This item is already in that location.',
+              variant: 'info',
+            })
+            return
+          }
+          if (obj.kind === 'folder' && destinationKey.startsWith(obj.key)) {
+            setAlertDialog({
+              isOpen: true,
+              title: 'Invalid Destination',
+              message: 'A folder cannot be moved inside itself. Choose a different location.',
+              variant: 'error',
+            })
+            return
+          }
+          try {
+            await renameObjectMutation.mutateAsync({ sourceKey: obj.key, destinationKey })
+          } catch (err) {
+            setAlertDialog({
+              isOpen: true,
+              title: 'Move Failed',
+              message: (err as Error).message,
+              variant: 'error',
+            })
+          }
+        },
+      })
+    },
+    [renameObjectMutation],
+  )
+
+  const handleCopyObject = useCallback(
+    (obj: BucketObject) => {
+      setOpenObjectMenu(null)
+      setPromptDialog({
+        isOpen: true,
+        title: 'Copy Item',
+        message: 'Enter the folder where the copy should be placed. Leave blank to copy to the root.',
+        defaultValue: parentPrefixOf(obj.key),
+        placeholder: 'photos/2024/',
+        confirmText: 'Copy',
+        allowEmpty: true,
+        onConfirm: async (input) => {
+          const normalizedPrefix = normalizeFolderInput(input)
+          const destinationKey = buildDestinationKey(normalizedPrefix, obj)
+          if (destinationKey === obj.key) {
+            setAlertDialog({
+              isOpen: true,
+              title: 'Copy Skipped',
+              message: 'Choose a different location for the copy.',
+              variant: 'info',
+            })
+            return
+          }
+          if (obj.kind === 'folder' && destinationKey.startsWith(obj.key)) {
+            setAlertDialog({
+              isOpen: true,
+              title: 'Invalid Destination',
+              message: 'A folder copy cannot target one of its own subfolders.',
+              variant: 'error',
+            })
+            return
+          }
+          try {
+            await copyObjectMutation.mutateAsync({ sourceKey: obj.key, destinationKey })
+          } catch (err) {
+            setAlertDialog({
+              isOpen: true,
+              title: 'Copy Failed',
+              message: (err as Error).message,
+              variant: 'error',
+            })
+          }
+        },
+      })
+    },
+    [copyObjectMutation],
   )
 
   const handleDownloadObject = useCallback(
@@ -872,7 +985,11 @@ const BucketPage = () => {
   )
 
   const isActionPending =
-    createFolderMutation.isPending || deleteObjectsMutation.isPending || renameObjectMutation.isPending || isUploading
+    createFolderMutation.isPending ||
+    deleteObjectsMutation.isPending ||
+    renameObjectMutation.isPending ||
+    copyObjectMutation.isPending ||
+    isUploading
 
   return (
     <AppShell searchPlaceholder="Search files and folders..." searchValue={searchQuery} onSearchChange={setSearchQuery}>
@@ -1225,6 +1342,22 @@ const BucketPage = () => {
                         >
                           <span className="material-symbols-outlined text-base">drive_file_rename_outline</span>
                           <span>Rename</span>
+                        </button>
+                        <button
+                          className="flex w-full items-center gap-3 rounded-md px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+                          onClick={() => handleMoveObject(obj)}
+                          disabled={renameObjectMutation.isPending}
+                        >
+                          <span className="material-symbols-outlined text-base">drive_file_move</span>
+                          <span>Move</span>
+                        </button>
+                        <button
+                          className="flex w-full items-center gap-3 rounded-md px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+                          onClick={() => handleCopyObject(obj)}
+                          disabled={copyObjectMutation.isPending}
+                        >
+                          <span className="material-symbols-outlined text-base">content_copy</span>
+                          <span>Make a copy</span>
                         </button>
                         <button
                           className="flex w-full items-center gap-3 rounded-md px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
@@ -1650,6 +1783,8 @@ const BucketPage = () => {
         message={promptDialog.message}
         defaultValue={promptDialog.defaultValue}
         placeholder={promptDialog.placeholder}
+        confirmText={promptDialog.confirmText}
+        allowEmpty={promptDialog.allowEmpty}
       />
 
       <AlertDialog

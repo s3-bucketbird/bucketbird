@@ -110,9 +110,10 @@ type DeleteObjectsResponse = {
   }
 }
 
-type RenameObjectResponse = {
+type OperationResultResponse = {
   result: {
-    objectsMoved: number
+    success: boolean
+    message: string
   }
 }
 
@@ -266,7 +267,12 @@ export type CreateFolderInput = {
 
 export type RenameObjectInput = {
   sourceKey: string
-  targetKey: string
+  destinationKey: string
+}
+
+export type CopyObjectInput = {
+  sourceKey: string
+  destinationKey: string
 }
 
 export type ObjectMetadata = MetadataResponse['metadata']
@@ -330,7 +336,14 @@ export const api = {
     return data.result
   },
   async renameObject(bucketId: string, input: RenameObjectInput) {
-    const data = await request<RenameObjectResponse>(`/api/v1/buckets/${bucketId}/objects/rename`, {
+    const data = await request<OperationResultResponse>(`/api/v1/buckets/${bucketId}/objects/rename`, {
+      method: 'POST',
+      body: input,
+    })
+    return data.result
+  },
+  async copyObject(bucketId: string, input: CopyObjectInput) {
+    const data = await request<OperationResultResponse>(`/api/v1/buckets/${bucketId}/objects/copy`, {
       method: 'POST',
       body: input,
     })

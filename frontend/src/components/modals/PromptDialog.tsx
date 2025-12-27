@@ -11,6 +11,7 @@ type PromptDialogProps = {
   placeholder?: string
   confirmText?: string
   cancelText?: string
+  allowEmpty?: boolean
 }
 
 export const PromptDialog = ({
@@ -23,6 +24,7 @@ export const PromptDialog = ({
   placeholder,
   confirmText = 'OK',
   cancelText = 'Cancel',
+  allowEmpty = false,
 }: PromptDialogProps) => {
   const [value, setValue] = useState(defaultValue)
 
@@ -49,10 +51,11 @@ export const PromptDialog = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (value.trim()) {
-      onConfirm(value.trim())
-      onClose()
+    if (!allowEmpty && !value.trim()) {
+      return
     }
+    onConfirm(value.trim())
+    onClose()
   }
 
   return (
@@ -80,7 +83,7 @@ export const PromptDialog = ({
             <Button variant="outline" type="button" onClick={onClose}>
               {cancelText}
             </Button>
-            <Button type="submit" disabled={!value.trim()}>
+            <Button type="submit" disabled={!allowEmpty && !value.trim()}>
               {confirmText}
             </Button>
           </div>

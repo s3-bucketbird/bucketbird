@@ -53,8 +53,8 @@ type DeleteObjectsResult struct {
 }
 
 type RenameObjectInput struct {
-	SourceKey string `json:"sourceKey"`
-	TargetKey string `json:"targetKey"`
+	SourceKey      string `json:"sourceKey"`
+	DestinationKey string `json:"destinationKey"`
 }
 
 type RenameObjectResult struct {

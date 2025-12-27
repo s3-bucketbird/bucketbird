@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -261,49 +260,20 @@ func (o *ObjectStore) GetObject(ctx context.Context, bucket, key string) (*s3.Ge
 	})
 }
 
-func (o *ObjectStore) PutObject(ctx context.Context, bucket, key string, body io.Reader, contentType string) error {
+func (o *ObjectStore) PutObject(ctx context.Context, bucket, key string, body io.Reader, contentType string, metadata map[string]string) error {
 	input := &s3.PutObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
+		Body:   body,
 	}
 	if contentType != "" {
 		input.ContentType = aws.String(contentType)
 	}
-
-	var (
-		tmpFile *os.File
-		err     error
-	)
-
-	if seeker, ok := body.(io.ReadSeeker); ok {
-		if _, err := seeker.Seek(0, io.SeekStart); err != nil {
-			return fmt.Errorf("rewind body: %w", err)
-		}
-		input.Body = seeker
-	} else {
-		tmpFile, err = os.CreateTemp("", "bucketbird-upload-*")
-		if err != nil {
-			return fmt.Errorf("create temp file: %w", err)
-		}
-		defer func() {
-			tmpFile.Close()
-			os.Remove(tmpFile.Name())
-		}()
-
-		size, err := io.Copy(tmpFile, body)
-		if err != nil {
-			return fmt.Errorf("buffer upload: %w", err)
-		}
-
-		if _, err := tmpFile.Seek(0, io.SeekStart); err != nil {
-			return fmt.Errorf("rewind temp file: %w", err)
-		}
-
-		input.Body = tmpFile
-		input.ContentLength = aws.Int64(size)
+	if len(metadata) > 0 {
+		input.Metadata = metadata
 	}
 
-	_, err = o.client.PutObject(ctx, input)
+	_, err := o.client.PutObject(ctx, input)
 	return err
 }
 

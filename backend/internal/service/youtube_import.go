@@ -66,6 +66,11 @@ type YouTubeImportResult struct {
 
 var fileNameSanitizer = regexp.MustCompile(`[^a-zA-Z0-9\-\._ ]+`)
 
+const (
+	youtubeVideoIDMetadataKey    = "bucketbird-video-id"
+	youtubeVideoTitleMetadataKey = "bucketbird-video-title"
+)
+
 func (s *BucketService) ImportYouTube(
 	ctx context.Context,
 	bucketID,
@@ -318,30 +323,65 @@ func (s *BucketService) downloadYouTubeVideo(
 	}
 
 	contentType := contentTypeFromMime(format.MimeType)
-	filename := buildYouTubeFilename(video.Title, video.ID, format)
-	key := filename
+	primaryFilename := buildYouTubeFilename(video.Title, format)
+	primaryKey := primaryFilename
 	if prefix != "" {
-		key = prefix + filename
+		primaryKey = prefix + primaryFilename
 	}
 
-	exists, err := objectExists(ctx, store, bucketName, key)
-	if err != nil {
+	legacyFilename := buildYouTubeFilenameWithID(video.Title, video.ID, format)
+	legacyKey := legacyFilename
+	if prefix != "" {
+		legacyKey = prefix + legacyFilename
+	}
+
+	primaryHead, err := store.HeadObject(ctx, bucketName, primaryKey)
+	if err != nil && !isNotFoundError(err) {
 		return nil, false, err
 	}
-	if exists {
+	if err == nil && metadataMatchesYouTubeVideo(primaryHead.Metadata, video.ID) {
 		return &YouTubeImportedItem{
 			Title:       video.Title,
-			Key:         key,
+			Key:         primaryKey,
 			VideoID:     video.ID,
 			SizeBytes:   0,
 			ContentType: contentType,
 		}, true, nil
 	}
+	if err != nil && isNotFoundError(err) {
+		primaryHead = nil
+	}
+
+	if _, err := store.HeadObject(ctx, bucketName, legacyKey); err == nil {
+		return &YouTubeImportedItem{
+			Title:       video.Title,
+			Key:         legacyKey,
+			VideoID:     video.ID,
+			SizeBytes:   0,
+			ContentType: contentType,
+		}, true, nil
+	} else if !isNotFoundError(err) {
+		return nil, false, err
+	}
+
+	key := primaryKey
+	if primaryHead != nil {
+		// A file already exists with the desired title, fall back to the legacy naming that
+		// includes the video ID to avoid overwriting unrelated content.
+		key = legacyKey
+	}
+
+	metadata := map[string]string{
+		youtubeVideoIDMetadataKey: video.ID,
+	}
+	if video.Title != "" {
+		metadata[youtubeVideoTitleMetadataKey] = video.Title
+	}
 
 	progressReader := newProgressReader(stream, format.ContentLength, progress)
 	defer progressReader.Close()
 
-	if err := store.PutObject(ctx, bucketName, key, progressReader, contentType); err != nil {
+	if err := store.PutObject(ctx, bucketName, key, progressReader, contentType, metadata); err != nil {
 		return nil, false, err
 	}
 
@@ -384,17 +424,25 @@ func selectYouTubeFormat(video *youtube.Video) (*youtube.Format, error) {
 	return &selected, nil
 }
 
-func buildYouTubeFilename(title, videoID string, format *youtube.Format) string {
+func buildYouTubeFilename(title string, format *youtube.Format) string {
+	name := buildYouTubeBaseName(title)
+	return fmt.Sprintf("%s%s", name, extensionFromMime(format.MimeType))
+}
+
+func buildYouTubeFilenameWithID(title, videoID string, format *youtube.Format) string {
+	name := buildYouTubeBaseName(title)
+	return fmt.Sprintf("%s-%s%s", name, videoID, extensionFromMime(format.MimeType))
+}
+
+func buildYouTubeBaseName(title string) string {
 	name := sanitizeFileName(title)
 	if name == "" {
 		name = "youtube-video"
 	}
-
-	ext := extensionFromMime(format.MimeType)
 	if len(name) > 80 {
 		name = name[:80]
 	}
-	return fmt.Sprintf("%s-%s%s", name, videoID, ext)
+	return name
 }
 
 func sanitizeFileName(value string) string {
@@ -404,6 +452,18 @@ func sanitizeFileName(value string) string {
 	value = strings.ReplaceAll(value, "\\", "-")
 	value = strings.Join(strings.Fields(value), "-")
 	return value
+}
+
+func metadataMatchesYouTubeVideo(metadata map[string]string, videoID string) bool {
+	if len(metadata) == 0 || videoID == "" {
+		return false
+	}
+	for key, value := range metadata {
+		if strings.EqualFold(key, youtubeVideoIDMetadataKey) && value == videoID {
+			return true
+		}
+	}
+	return false
 }
 
 func extensionFromMime(mimeType string) string {
@@ -442,17 +502,6 @@ func emitProgress(progress func(YouTubeImportProgress), event YouTubeImportProgr
 		return
 	}
 	progress(event)
-}
-
-func objectExists(ctx context.Context, store *storage.ObjectStore, bucket, key string) (bool, error) {
-	_, err := store.HeadObject(ctx, bucket, key)
-	if err == nil {
-		return true, nil
-	}
-	if isNotFoundError(err) {
-		return false, nil
-	}
-	return false, err
 }
 
 func isNotFoundError(err error) bool {
