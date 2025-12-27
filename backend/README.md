@@ -8,28 +8,40 @@ The backend follows a clean architecture pattern with clear separation of concer
 
 ```
 backend/
-├── cmd/                      # Application entry points
-│   ├── bucketbird-api/      # Main API server
-│   ├── bucketbird-create-user/
-│   └── bucketbird-password-reset/
-├── internal/                 # Private application code
-│   ├── api/                 # HTTP handlers (presentation layer)
-│   │   ├── auth/           # Authentication endpoints
-│   │   ├── buckets/        # Bucket management endpoints
-│   │   ├── credentials/    # Credential management endpoints
-│   │   └── profile/        # User profile endpoints
-│   ├── service/            # Business logic layer
-│   ├── repository/         # Data access layer
-│   ├── middleware/         # HTTP middleware
-│   ├── storage/            # S3 client abstraction
-│   ├── config/             # Configuration management
-│   └── logging/            # Logging setup
-├── pkg/                     # Public reusable packages
-│   ├── crypto/             # Encryption utilities
-│   ├── jwt/                # JWT token management
-│   └── validator/          # Input validation
-├── migrations/              # Database migrations
-└── queries/                 # SQL queries for sqlc
+├── cmd/
+│   └── bucketbird/          # CLI application entry point
+│       ├── main.go         # Main CLI with subcommands
+│       └── cmd/            # CLI commands (serve, migrate, user)
+├── internal/                # Private application code
+│   ├── api/                # HTTP handlers (presentation layer)
+│   │   ├── auth/          # Authentication endpoints
+│   │   ├── buckets/       # Bucket management endpoints
+│   │   ├── credentials/   # Credential management endpoints
+│   │   └── profile/       # User profile endpoints
+│   ├── service/           # Business logic layer
+│   │   ├── auth.go       # Authentication service
+│   │   ├── buckets.go    # Bucket service
+│   │   ├── credentials.go # Credential service
+│   │   └── profile.go    # Profile service
+│   ├── repository/        # Data access layer
+│   │   ├── repository.go # Repository interfaces
+│   │   ├── pg_repository.go # PostgreSQL implementation
+│   │   └── sqlc/         # Generated type-safe SQL code
+│   ├── middleware/        # HTTP middleware
+│   │   ├── auth.go       # Authentication middleware
+│   │   └── security.go   # Security headers
+│   ├── storage/           # S3 client abstraction
+│   │   ├── objectstore.go # S3 operations
+│   │   └── postgres.go   # Legacy PostgreSQL code
+│   ├── domain/            # Domain models
+│   ├── security/          # Security utilities (legacy)
+│   ├── config/            # Configuration management
+│   └── logging/           # Logging setup
+├── pkg/                    # Public reusable packages
+│   ├── crypto/            # Password hashing & encryption utilities
+│   └── jwt/               # JWT token management
+├── migrations/             # Database migrations (golang-migrate)
+└── queries/                # SQL queries for sqlc code generation
 
 ```
 
@@ -43,20 +55,23 @@ backend/
 ## Tech Stack
 
 - **Language**: Go 1.23+
-- **Web Framework**: Chi router
-- **Database**: PostgreSQL with pgx driver
+- **Web Framework**: Chi router v5
+- **Database**: PostgreSQL 15+ with pgx driver
 - **Code Generation**: sqlc for type-safe SQL queries
-- **Authentication**: JWT tokens with bcrypt password hashing
+- **Migrations**: golang-migrate for versioned database migrations
+- **Authentication**: JWT tokens with Argon2id password hashing
 - **Storage**: AWS SDK v2 for S3-compatible storage
 - **Encryption**: AES-256-GCM for credential encryption
+- **CLI**: Cobra for command-line interface
 
 ## Features
 
 ### Authentication & Authorization
 - JWT-based authentication with access and refresh tokens
-- Secure password hashing with bcrypt
+- Secure password hashing with Argon2id
 - Session management with refresh token rotation
 - User registration and login
+- CLI-based user management (create, delete, list, password reset)
 
 ### Credential Management
 - Encrypted storage of S3 credentials (access key, secret key)
@@ -83,30 +98,39 @@ backend/
 
 ## Configuration
 
-The application is configured via environment variables:
+The application is configured via environment variables with the `BB_` prefix:
 
 ```bash
+# Application
+BB_APP_NAME=bucketbird-api
+BB_ENV=development
+
 # Server
-PORT=8080
-ENV=development
+BB_HTTP_PORT=8080
+BB_HTTP_READ_TIMEOUT=30m
+BB_HTTP_WRITE_TIMEOUT=30m
 
 # Database
-DB_DSN=postgres://user:password@localhost:5432/bucketbird?sslmode=disable
+BB_DB_HOST=localhost
+BB_DB_PORT=5432
+BB_DB_NAME=bucketbird
+BB_DB_USER=bucketbird
+BB_DB_PASSWORD=bucketbird
+# Or use DSN directly:
+BB_DB_DSN=postgres://bucketbird:bucketbird@localhost:5432/bucketbird?sslmode=disable
 
 # Security
-JWT_SECRET=your-jwt-secret-key-min-32-chars
-ENCRYPTION_KEY=your-encryption-key-must-be-32-bytes
-ACCESS_TOKEN_TTL=15m
-REFRESH_TOKEN_TTL=7d
+BB_JWT_SECRET=your-jwt-secret-key-min-32-chars
+BB_ENCRYPTION_KEY=your-encryption-key-must-be-32-bytes!!
+BB_ACCESS_TOKEN_TTL=15m
+BB_REFRESH_TOKEN_TTL=168h  # 7 days
 
 # CORS
-CORS_ALLOWED_ORIGINS=http://localhost:5173
-CORS_ALLOWED_METHODS=GET,POST,PUT,DELETE,OPTIONS
-CORS_ALLOWED_HEADERS=Content-Type,Authorization
-CORS_MAX_AGE=300
+BB_ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
 
 # Features
-REGISTRATION_ENABLED=true
+BB_ALLOW_REGISTRATION=true
+BB_ENABLE_DEMO_LOGIN=false
 ```
 
 ## Database Setup
@@ -147,36 +171,69 @@ Query files are in `queries/` and generated code goes to `internal/repository/sq
 ## Building
 
 ```bash
-# Build the API server
-go build -o bucketbird-api ./cmd/bucketbird-api
+# Build the CLI application
+go build -o bucketbird ./cmd/bucketbird
 
 # Build with optimizations for production
-CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o bucketbird-api ./cmd/bucketbird-api
+CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o bucketbird ./cmd/bucketbird
 ```
 
 ## Running
+
+### CLI Commands
+
+The backend uses a CLI interface with subcommands:
+
+```bash
+# Start the HTTP API server
+go run ./cmd/bucketbird serve
+
+# Run database migrations
+go run ./cmd/bucketbird migrate
+
+# Create a new user
+go run ./cmd/bucketbird user create \
+  --email user@example.com \
+  --password "SecurePass123!" \
+  --first-name John \
+  --last-name Doe
+
+# List all users
+go run ./cmd/bucketbird user list
+
+# Reset a user's password
+go run ./cmd/bucketbird user reset-password \
+  --email user@example.com \
+  --password "NewPassword123!"
+
+# Delete a user
+go run ./cmd/bucketbird user delete --email user@example.com
+```
 
 ### Development
 
 ```bash
 # Set environment variables
-export DB_DSN="postgres://bucketbird:bucketbird@localhost:5432/bucketbird?sslmode=disable"
-export JWT_SECRET="your-secret-key-at-least-32-characters-long"
-export ENCRYPTION_KEY="your-32-byte-encryption-key-here!!"
-export CORS_ALLOWED_ORIGINS="http://localhost:5173"
+export BB_DB_DSN="postgres://bucketbird:bucketbird@localhost:5432/bucketbird?sslmode=disable"
+export BB_JWT_SECRET="your-secret-key-at-least-32-characters-long"
+export BB_ENCRYPTION_KEY="your-32-byte-encryption-key-here!!"
+export BB_ALLOWED_ORIGINS="http://localhost:5173"
 
 # Run the server
-go run ./cmd/bucketbird-api
+go run ./cmd/bucketbird serve
 ```
 
 ### Production
 
 ```bash
 # Build the binary
-CGO_ENABLED=0 GOOS=linux go build -o bucketbird-api ./cmd/bucketbird-api
+CGO_ENABLED=0 GOOS=linux go build -o bucketbird ./cmd/bucketbird
 
-# Run with environment variables
-./bucketbird-api
+# Run migrations
+./bucketbird migrate
+
+# Start the server
+./bucketbird serve
 ```
 
 ### Docker
@@ -185,12 +242,17 @@ CGO_ENABLED=0 GOOS=linux go build -o bucketbird-api ./cmd/bucketbird-api
 # Build image
 docker build -t bucketbird-api .
 
-# Run container
+# Run migrations
+docker run --rm \
+  -e BB_DB_DSN="postgres://..." \
+  bucketbird-api migrate
+
+# Run server
 docker run -p 8080:8080 \
-  -e DB_DSN="postgres://..." \
-  -e JWT_SECRET="..." \
-  -e ENCRYPTION_KEY="..." \
-  bucketbird-api
+  -e BB_DB_DSN="postgres://..." \
+  -e BB_JWT_SECRET="..." \
+  -e BB_ENCRYPTION_KEY="..." \
+  bucketbird-api serve
 ```
 
 ## API Endpoints
@@ -200,7 +262,6 @@ docker run -p 8080:8080 \
 - `POST /api/v1/auth/login` - Login and get tokens
 - `POST /api/v1/auth/refresh` - Refresh access token
 - `POST /api/v1/auth/logout` - Logout and invalidate session
-- `GET /api/v1/auth/me` - Get current user
 
 ### Credentials
 - `GET /api/v1/credentials` - List all credentials
@@ -214,44 +275,45 @@ docker run -p 8080:8080 \
 - `GET /api/v1/buckets` - List all buckets
 - `POST /api/v1/buckets` - Create new bucket
 - `GET /api/v1/buckets/:id` - Get bucket details
-- `PUT /api/v1/buckets/:id` - Update bucket
+- `PATCH /api/v1/buckets/:id` - Update bucket
 - `DELETE /api/v1/buckets/:id` - Delete bucket
 
 ### Objects
 - `GET /api/v1/buckets/:id/objects` - List objects (with prefix support)
 - `GET /api/v1/buckets/:id/objects/search` - Search objects
-- `POST /api/v1/buckets/:id/objects/upload` - Upload file
+- `POST /api/v1/buckets/:id/objects/upload` - Upload file (presigned URL)
 - `GET /api/v1/buckets/:id/objects/download` - Download file or folder
 - `POST /api/v1/buckets/:id/objects/folders` - Create folder
-- `POST /api/v1/buckets/:id/objects/delete` - Delete objects/folders
-- `POST /api/v1/buckets/:id/objects/rename` - Rename object/folder
+- `DELETE /api/v1/buckets/:id/objects` - Delete objects/folders
+- `PATCH /api/v1/buckets/:id/objects/:key` - Rename/move object/folder
 - `POST /api/v1/buckets/:id/objects/copy` - Copy object
 - `GET /api/v1/buckets/:id/objects/metadata` - Get object metadata
 - `POST /api/v1/buckets/:id/objects/presign` - Generate presigned URL
 
 ### Profile
 - `GET /api/v1/profile` - Get user profile
-- `PUT /api/v1/profile` - Update profile
-- `PUT /api/v1/profile/password` - Change password
+- `PATCH /api/v1/profile` - Update profile
 
 ## Security
 
 ### Authentication
-- JWT tokens with configurable expiration
+- JWT tokens with configurable expiration (default: 15m access, 7d refresh)
 - Refresh token rotation for enhanced security
-- Secure password hashing with bcrypt (cost factor 10)
+- Secure password hashing with Argon2id (memory: 64MB, time: 3, parallelism: 2)
 - Session management with database-backed refresh tokens
+- SHA-256 hashed refresh tokens stored in database
 
 ### Encryption
-- AES-256-GCM encryption for S3 credentials
+- AES-256-GCM encryption for S3 credentials at rest
 - Unique nonce per encryption operation
-- Environment-based encryption key management
+- Environment-based encryption key management (32-byte key required)
 
 ### HTTP Security Headers
-- CORS configuration
-- Security headers middleware
-- Request ID tracking
-- Panic recovery
+- CORS configuration with configurable allowed origins
+- Security headers middleware (X-Frame-Options, X-Content-Type-Options, etc.)
+- Request ID tracking for observability
+- Panic recovery middleware
+- Authentication middleware for protected routes
 
 ## Development
 
@@ -319,14 +381,47 @@ migrate -path migrations -database "$DB_DSN" version
 - Check token expiration times are reasonable
 - Verify system clock is synchronized
 
+## Recent Changes (v0.1.0)
+
+The backend was recently refactored to follow clean architecture principles:
+
+### Architecture Improvements
+- **CLI Interface**: Migrated from standalone binaries to a unified CLI with Cobra
+- **Service Layer**: Introduced dedicated service layer for business logic
+- **Repository Pattern**: Interface-based repository layer for better testability
+- **Type-Safe SQL**: Migrated to sqlc for compile-time SQL validation
+- **Versioned Migrations**: Switched from runtime schema initialization to golang-migrate
+- **Password Security**: Upgraded from bcrypt to Argon2id for password hashing
+
+### What Changed
+- Main entry point moved from `cmd/bucketbird-api/main.go` to `cmd/bucketbird/main.go`
+- HTTP handlers now use Chi router with proper middleware stack
+- Database queries are now generated by sqlc from `queries/*.sql` files
+- Configuration uses consistent `BB_` prefix for all environment variables
+- User management now available via CLI commands instead of separate binaries
+
+### Migration Notes
+If upgrading from a previous version:
+1. Update environment variable names to use `BB_` prefix
+2. Run database migrations: `./bucketbird migrate`
+3. Update any scripts to use new CLI commands
+4. Rehash existing passwords will happen automatically on next login (Argon2id migration)
+
 ## Contributing
 
 1. Follow the existing code structure and patterns
-2. Use sqlc for all database queries
+2. Use sqlc for all database queries (modify `queries/*.sql`, then run `sqlc generate`)
 3. Write tests for new functionality
 4. Follow Go best practices and idioms
-5. Update documentation as needed
+5. Run migrations for schema changes (`./bucketbird migrate`)
+6. Update documentation as needed
+
+## Version History
+
+See [CHANGELOG.md](../CHANGELOG.md) for detailed release notes.
+
+**Current Version**: v0.1.0 (Released 2025-11-08)
 
 ## License
 
-See LICENSE file in the repository root.
+This project is licensed under the MIT License. See LICENSE file in the repository root.

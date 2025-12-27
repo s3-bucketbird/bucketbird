@@ -116,6 +116,48 @@ type RenameObjectResponse = {
   }
 }
 
+type YouTubeImportResponse = {
+  result: {
+    kind: 'video' | 'playlist'
+    imported: number
+    skipped: number
+    totalBytes: number
+    items: Array<{
+      title: string
+      key: string
+      videoId: string
+      sizeBytes: number
+      contentType: string
+    }>
+    errors: Array<{
+      title?: string
+      videoId?: string
+      error: string
+    }>
+  }
+}
+
+export type YouTubeImportProgress = {
+  stage: string
+  kind?: 'video' | 'playlist'
+  index?: number
+  total?: number
+  imported?: number
+  failed?: number
+  totalBytes?: number
+  videoTitle?: string
+  videoId?: string
+  message?: string
+  error?: string
+  destination?: string
+  bytesRead?: number
+  totalBytesExpected?: number
+  percent?: number
+  speedBytesPerSec?: number
+  skipped?: boolean
+  skippedCount?: number
+}
+
 type MetadataResponse = {
   metadata: {
     key: string
@@ -293,6 +335,100 @@ export const api = {
       body: input,
     })
     return data.result
+  },
+  async importYouTubeWithProgress(
+    bucketId: string,
+    input: { url: string; destinationPrefix?: string },
+    onProgress?: (progress: YouTubeImportProgress) => void,
+  ) {
+    const url = new URL(
+      `/api/v1/buckets/${bucketId}/objects/import/youtube?stream=1`,
+      API_BASE_URL,
+    )
+
+    const payload = {
+      url: input.url,
+      destinationPrefix: input.destinationPrefix ?? '',
+    }
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    }
+
+    const token = getAuthToken()
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`
+    }
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+      credentials: 'include',
+    })
+
+    if (!response.ok) {
+      const message = await extractError(response)
+      throw new Error(message)
+    }
+
+    if (!response.body) {
+      throw new Error('Streaming is not supported in this browser.')
+    }
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) {
+        break
+      }
+
+      buffer += decoder.decode(value, { stream: true })
+
+      let newlineIndex = buffer.indexOf('\n')
+      while (newlineIndex >= 0) {
+        const line = buffer.slice(0, newlineIndex).trim()
+        buffer = buffer.slice(newlineIndex + 1)
+        if (line.length > 0) {
+          const payload = JSON.parse(line) as {
+            progress?: YouTubeImportProgress
+            result?: YouTubeImportResponse['result']
+            error?: string
+          }
+          if (payload.progress && onProgress) {
+            onProgress(payload.progress)
+          }
+          if (payload.error) {
+            throw new Error(payload.error)
+          }
+          if (payload.result) {
+            return payload.result
+          }
+        }
+
+        newlineIndex = buffer.indexOf('\n')
+      }
+    }
+
+    buffer = buffer.trim()
+    if (buffer.length > 0) {
+      const payload = JSON.parse(buffer) as {
+        progress?: YouTubeImportProgress
+        result?: YouTubeImportResponse['result']
+        error?: string
+      }
+      if (payload.error) {
+        throw new Error(payload.error)
+      }
+      if (payload.result) {
+        return payload.result
+      }
+    }
+
+    throw new Error('Import ended unexpectedly without a result.')
   },
   async getObjectMetadata(bucketId: string, key: string, signal?: AbortSignal) {
     const params = new URLSearchParams({ key })

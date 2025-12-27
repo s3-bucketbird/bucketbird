@@ -18,6 +18,11 @@ import (
 
 const maxMultipartUploadSize int64 = 5 * 1024 * 1024 * 1024 // 5 GiB
 
+type YouTubeImportRequest struct {
+	URL               string `json:"url"`
+	DestinationPrefix string `json:"destinationPrefix"`
+}
+
 // ListObjects lists objects in a bucket
 func (h *Handler) ListObjects(w http.ResponseWriter, r *http.Request) {
 	userID, ok := middleware.GetUserIDFromContext(r.Context())
@@ -155,6 +160,95 @@ uploadFile:
 		"success": true,
 		"message": "File uploaded successfully",
 	}, http.StatusOK)
+}
+
+// ImportYouTube handles importing YouTube videos or playlists into a bucket
+func (h *Handler) ImportYouTube(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.GetUserIDFromContext(r.Context())
+	if !ok {
+		h.respondError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	bucketID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		h.respondError(w, "Invalid bucket ID", http.StatusBadRequest)
+		return
+	}
+
+	var req YouTubeImportRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.respondError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if strings.TrimSpace(req.URL) == "" {
+		h.respondError(w, "YouTube URL is required", http.StatusBadRequest)
+		return
+	}
+
+	stream := r.URL.Query().Get("stream") == "1"
+	if stream {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			h.respondError(w, "Streaming is not supported on this server", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.Header().Set("Cache-Control", "no-cache")
+
+		encoder := json.NewEncoder(w)
+		progressFn := func(progress service.YouTubeImportProgress) {
+			if err := encoder.Encode(map[string]interface{}{"progress": progress}); err != nil {
+				h.logger.Warn("failed to stream progress", slog.Any("error", err))
+			}
+			flusher.Flush()
+		}
+
+		result, importErr := h.bucketService.ImportYouTube(
+			r.Context(),
+			bucketID,
+			userID,
+			service.YouTubeImportInput{
+				URL:               req.URL,
+				DestinationPrefix: req.DestinationPrefix,
+			},
+			h.encryptionKey,
+			progressFn,
+		)
+		if importErr != nil {
+			h.logger.Error("youtube import failed", slog.Any("error", importErr))
+			encoder.Encode(map[string]interface{}{
+				"error": fmt.Sprintf("YouTube import failed: %v", importErr),
+			})
+			flusher.Flush()
+			return
+		}
+
+		encoder.Encode(map[string]interface{}{"result": result})
+		flusher.Flush()
+		return
+	}
+
+	result, importErr := h.bucketService.ImportYouTube(
+		r.Context(),
+		bucketID,
+		userID,
+		service.YouTubeImportInput{
+			URL:               req.URL,
+			DestinationPrefix: req.DestinationPrefix,
+		},
+		h.encryptionKey,
+		nil,
+	)
+	if importErr != nil {
+		h.logger.Error("youtube import failed", slog.Any("error", importErr))
+		h.respondError(w, fmt.Sprintf("YouTube import failed: %v", importErr), http.StatusBadRequest)
+		return
+	}
+
+	h.respondJSON(w, map[string]interface{}{"result": result}, http.StatusOK)
 }
 
 // DownloadObject downloads an object from a bucket

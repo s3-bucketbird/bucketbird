@@ -5,7 +5,7 @@ import { useQueryClient, useQuery } from '@tanstack/react-query'
 
 import AppShell from '../components/layout/AppShell'
 import Button from '../components/ui/Button'
-import { api } from '../api/client'
+import { api, type YouTubeImportProgress } from '../api/client'
 import { useBucketObjects } from '../hooks/useBucketObjects'
 import { useBuckets } from '../hooks/useBuckets'
 import { useCreateFolder, useDeleteObjects, useRenameObject } from '../hooks/useObjectActions'
@@ -73,6 +73,52 @@ const getFileType = (filename: string): 'image' | 'video' | 'audio' | 'text' | '
   return 'unknown'
 }
 
+type VideoProgressState = {
+  id: string
+  title?: string
+  stage?: string
+  percent?: number
+  speedBytesPerSec?: number
+  bytesRead?: number
+  totalBytes?: number
+  skipped?: boolean
+  error?: string
+}
+
+const formatBytes = (bytes?: number): string => {
+  if (!bytes || bytes <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let value = bytes
+  let unitIndex = 0
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024
+    unitIndex++
+  }
+  const decimals = value >= 10 || unitIndex === 0 ? 0 : 1
+  return `${value.toFixed(decimals)} ${units[unitIndex]}`
+}
+
+const describeVideoStage = (entry: VideoProgressState): string => {
+  if (entry.error) {
+    return `Error: ${entry.error}`
+  }
+  if (entry.skipped) {
+    return 'Skipped (already exists)'
+  }
+  switch (entry.stage) {
+    case 'starting':
+      return 'Preparing download…'
+    case 'downloading':
+      return 'Downloading…'
+    case 'downloaded':
+      return 'Completed'
+    case 'skipped':
+      return 'Skipped'
+    default:
+      return entry.stage ? entry.stage : 'Pending'
+  }
+}
+
 const BucketPage = () => {
   const { bucketId: bucketIdParam } = useParams<{ bucketId: string }>()
   const bucketId = bucketIdParam ?? ''
@@ -101,6 +147,14 @@ const BucketPage = () => {
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set())
   const [searchQuery, setSearchQuery] = useState('')
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const [isYouTubeDialogOpen, setIsYouTubeDialogOpen] = useState(false)
+  const [youtubeUrl, setYoutubeUrl] = useState('')
+  const [youtubeDestination, setYoutubeDestination] = useState('')
+  const [isImportingFromYouTube, setIsImportingFromYouTube] = useState(false)
+  const [youtubeImportError, setYoutubeImportError] = useState<string | null>(null)
+  const [youtubeProgressMessages, setYoutubeProgressMessages] = useState<string[]>([])
+  const [youtubeVideoProgress, setYoutubeVideoProgress] = useState<Record<string, VideoProgressState>>({})
+  const [youtubeProgressOrder, setYoutubeProgressOrder] = useState<string[]>([])
 
   // Dialog states
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -147,6 +201,163 @@ const BucketPage = () => {
     refetch,
     isFetching,
   } = useBucketObjects(bucketId, prefix)
+
+  const formatYouTubeProgressMessage = useCallback((progress: YouTubeImportProgress): string => {
+    const countPrefix =
+      progress.index && progress.total ? `(${progress.index}/${progress.total}) ` : progress.index ? `(${progress.index}) ` : ''
+    switch (progress.stage) {
+      case 'resolving':
+      case 'resolved':
+      case 'starting':
+        return progress.message ?? ''
+      case 'downloading':
+        return ''
+      case 'downloaded':
+        return `${countPrefix}Finished ${progress.videoTitle ?? progress.videoId ?? 'item'}`
+      case 'skipped':
+        return `${countPrefix}${progress.videoTitle ?? progress.videoId ?? 'Item'} already exists, skipped.`
+      case 'error':
+        return `${countPrefix}Error with ${progress.videoTitle ?? progress.videoId ?? 'item'}: ${progress.error ?? 'Unknown error'}`
+      case 'finished':
+        return (
+          progress.message ??
+          `Finished importing ${progress.imported ?? 0} of ${progress.total ?? 0} items (${progress.failed ?? 0} failed, ${progress.skippedCount ?? 0} skipped).`
+        )
+      default:
+        return progress.message ?? progress.stage
+    }
+  }, [])
+
+  const handleYouTubeProgress = useCallback(
+    (progress: YouTubeImportProgress) => {
+      const videoId = progress.videoId
+      if (videoId) {
+        setYoutubeVideoProgress((prev) => {
+          const previous = prev[videoId] ?? { id: videoId }
+          const updated: VideoProgressState = {
+            ...previous,
+            title: progress.videoTitle ?? previous.title,
+            stage: progress.stage ?? previous.stage,
+            percent:
+              progress.stage === 'downloaded' || progress.stage === 'skipped'
+                ? 100
+                : progress.percent ?? previous.percent,
+            speedBytesPerSec:
+              progress.stage === 'downloaded' || progress.stage === 'skipped'
+                ? 0
+                : progress.speedBytesPerSec ?? previous.speedBytesPerSec,
+            bytesRead: progress.bytesRead ?? previous.bytesRead,
+            totalBytes: progress.totalBytesExpected ?? previous.totalBytes,
+            skipped: progress.skipped || previous.skipped,
+            error: progress.error ?? previous.error,
+          }
+          return { ...prev, [videoId]: updated }
+        })
+        setYoutubeProgressOrder((prev) => (prev.includes(videoId) ? prev : [...prev, videoId]))
+      }
+
+      const message = formatYouTubeProgressMessage(progress)
+      if (message) {
+        setYoutubeProgressMessages((prev) => {
+          const next = [...prev, message]
+          const MAX_LOG = 200
+          return next.length > MAX_LOG ? next.slice(next.length - MAX_LOG) : next
+        })
+      }
+    },
+    [formatYouTubeProgressMessage],
+  )
+
+  const handleOpenYouTubeDialog = useCallback(() => {
+    setYoutubeUrl('')
+    setYoutubeDestination(prefix)
+    setYoutubeImportError(null)
+    setYoutubeProgressMessages([])
+    setYoutubeVideoProgress({})
+    setYoutubeProgressOrder([])
+    setIsYouTubeDialogOpen(true)
+  }, [prefix])
+
+  const handleCloseYouTubeDialog = useCallback(() => {
+    if (isImportingFromYouTube) return
+    setIsYouTubeDialogOpen(false)
+    setYoutubeImportError(null)
+    setYoutubeProgressMessages([])
+    setYoutubeVideoProgress({})
+    setYoutubeProgressOrder([])
+  }, [isImportingFromYouTube])
+
+  const handleSubmitYouTubeImport = useCallback(async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+
+    if (!bucketId) {
+      setYoutubeImportError('Bucket is unavailable.')
+      return
+    }
+
+    if (!youtubeUrl.trim()) {
+      setYoutubeImportError('Please provide a YouTube video or playlist link.')
+      return
+    }
+
+    setIsImportingFromYouTube(true)
+    setYoutubeImportError(null)
+    setYoutubeProgressMessages([])
+    setYoutubeVideoProgress({})
+    setYoutubeProgressOrder([])
+
+    try {
+      const result = await api.importYouTubeWithProgress(
+        bucketId,
+        {
+          url: youtubeUrl.trim(),
+          destinationPrefix: youtubeDestination.trim(),
+        },
+        handleYouTubeProgress,
+      )
+
+      const summaryParts = [`Imported ${result.imported} item${result.imported === 1 ? '' : 's'}.`]
+      if (result.errors.length > 0) {
+        summaryParts.push(
+          `Failed to import ${result.errors.length} entr${result.errors.length === 1 ? 'y' : 'ies'}.`,
+        )
+      }
+      if (result.skipped > 0) {
+        summaryParts.push(
+          `Skipped ${result.skipped} existing file${result.skipped === 1 ? '' : 's'} that already existed.`,
+        )
+      }
+      if (result.imported === 0 && result.skipped === 0) {
+        summaryParts.push('No files were added.')
+      }
+
+      const hasErrors = result.errors.length > 0
+      const hasSkips = result.skipped > 0
+      const variant: 'success' | 'warning' | 'error' =
+        result.imported === 0 && !hasSkips ? 'error' : hasErrors || hasSkips ? 'warning' : 'success'
+
+      setAlertDialog({
+        isOpen: true,
+        title:
+          result.imported === 0 && !hasSkips
+            ? 'YouTube import failed'
+            : hasErrors || hasSkips
+              ? 'YouTube import completed with warnings'
+              : 'YouTube import complete',
+        message: summaryParts.join(' '),
+        variant,
+      })
+
+      setIsYouTubeDialogOpen(false)
+      setYoutubeUrl('')
+      setYoutubeDestination(prefix)
+      await refetch()
+    } catch (err) {
+      setYoutubeImportError((err as Error).message)
+    } finally {
+      setIsImportingFromYouTube(false)
+    }
+  }, [bucketId, youtubeUrl, youtubeDestination, prefix, refetch, setAlertDialog, handleYouTubeProgress])
 
   // Recursive search query
   const {
@@ -692,6 +903,15 @@ const BucketPage = () => {
           <Button onClick={handleBrowseFiles} disabled={isUploading}>
             <span className="material-symbols-outlined text-xl">upload_file</span>
             <span className="truncate">Upload Files</span>
+          </Button>
+          <Button
+            variant="outline"
+            className="border-slate-300 text-red-600 hover:bg-red-50 dark:border-slate-700 dark:text-red-400 dark:hover:bg-red-900/30"
+            onClick={handleOpenYouTubeDialog}
+            disabled={isImportingFromYouTube}
+          >
+            <span className="material-symbols-outlined text-xl">smart_display</span>
+            <span className="truncate">Import from YouTube</span>
           </Button>
         </div>
       </div>
@@ -1260,6 +1480,142 @@ const BucketPage = () => {
               <span className="material-symbols-outlined text-3xl">chevron_right</span>
             </button>
           )}
+        </div>
+      )}
+
+      {isYouTubeDialogOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-900">
+            <div className="mb-4">
+              <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Import from YouTube</h2>
+              <p className="text-sm text-slate-500 dark:text-slate-400">
+                Paste a video or playlist link and choose the destination folder within this bucket.
+              </p>
+            </div>
+            <form className="flex flex-col gap-4" onSubmit={handleSubmitYouTubeImport}>
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-200">
+                  YouTube link
+                </label>
+                <input
+                  type="url"
+                  value={youtubeUrl}
+                  onChange={(e) => setYoutubeUrl(e.target.value)}
+                  placeholder="https://www.youtube.com/watch?v=..."
+                  className="w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 dark:border-slate-700 dark:bg-slate-800 dark:text-white dark:placeholder:text-slate-500"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-200">
+                  Destination folder
+                </label>
+                <input
+                  type="text"
+                  value={youtubeDestination}
+                  onChange={(e) => setYoutubeDestination(e.target.value)}
+                  placeholder="videos/youtube"
+                  className="w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 dark:border-slate-700 dark:bg-slate-800 dark:text-white dark:placeholder:text-slate-500"
+                />
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  Leave blank to save files to the bucket root. Use "/" to create nested folders.
+                </p>
+              </div>
+              {youtubeImportError && (
+                <p className="text-sm text-red-600 dark:text-red-400">{youtubeImportError}</p>
+              )}
+              {(isImportingFromYouTube || youtubeProgressMessages.length > 0 || youtubeProgressOrder.length > 0) && (
+                <div className="space-y-4 rounded-lg border border-slate-200 bg-slate-50/80 p-3 dark:border-slate-700 dark:bg-slate-800/60">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-slate-700 dark:text-slate-100">
+                    <span
+                      className={`material-symbols-outlined text-base ${isImportingFromYouTube ? 'animate-spin' : ''}`}
+                    >
+                      progress_activity
+                    </span>
+                    Import progress
+                  </div>
+                  {youtubeProgressOrder.length > 0 && (
+                    <div className="space-y-3">
+                      {youtubeProgressOrder.map((videoId) => {
+                        const entry = youtubeVideoProgress[videoId]
+                        if (!entry) return null
+                        const percent = Math.min(Math.max(entry.percent ?? 0, 0), 100)
+                        return (
+                          <div
+                            key={videoId}
+                            className="rounded-lg border border-slate-200 bg-white/80 p-3 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-900/40"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <p className="font-medium text-slate-800 dark:text-slate-100">
+                                  {entry.title ?? entry.id}
+                                </p>
+                                <p className="text-xs text-slate-500 dark:text-slate-400">
+                                  {describeVideoStage(entry)}
+                                </p>
+                              </div>
+                              <span className="text-xs font-medium text-slate-600 dark:text-slate-300">
+                                {typeof entry.percent === 'number'
+                                  ? `${percent.toFixed(percent < 100 ? 1 : 0)}%`
+                                  : '--'}
+                              </span>
+                            </div>
+                            <div className="mt-2 h-2 w-full rounded-full bg-slate-200 dark:bg-slate-700/80">
+                              <div
+                                className={`h-full rounded-full ${entry.skipped ? 'bg-amber-500' : entry.error ? 'bg-red-500' : 'bg-primary'}`}
+                                style={{ width: `${percent}%` }}
+                              />
+                            </div>
+                            <div className="mt-1 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+                              <span>
+                                {typeof entry.bytesRead === 'number'
+                                  ? `${formatBytes(entry.bytesRead)}${
+                                      typeof entry.totalBytes === 'number' ? ` / ${formatBytes(entry.totalBytes)}` : ''
+                                    }`
+                                  : ''}
+                              </span>
+                              <span>
+                                {entry.skipped
+                                  ? 'Skipped'
+                                  : entry.error
+                                    ? 'Error'
+                                    : entry.speedBytesPerSec
+                                      ? `${formatBytes(entry.speedBytesPerSec)}/s`
+                                      : ''}
+                              </span>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                  <div className="max-h-32 overflow-y-auto text-xs text-slate-600 dark:text-slate-300">
+                    {youtubeProgressMessages.length === 0 ? (
+                      <p>{isImportingFromYouTube ? 'Starting import…' : 'Awaiting updates…'}</p>
+                    ) : (
+                      <ul className="list-disc space-y-1 pl-4">
+                        {youtubeProgressMessages.map((message, index) => (
+                          <li key={`${message}-${index}`}>{message}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </div>
+              )}
+              <div className="flex justify-end gap-3">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleCloseYouTubeDialog}
+                  disabled={isImportingFromYouTube}
+                >
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={isImportingFromYouTube || !youtubeUrl.trim()}>
+                  {isImportingFromYouTube ? 'Importing…' : 'Start Import'}
+                </Button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
 

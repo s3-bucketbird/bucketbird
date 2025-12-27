@@ -162,6 +162,7 @@ func runServe(cmd *cobra.Command, args []string) {
 			r.Get("/{id}/objects", bucketHandler.ListObjects)
 			r.Get("/{id}/objects/search", bucketHandler.SearchObjects)
 			r.Post("/{id}/objects/upload", bucketHandler.UploadObject)
+			r.Post("/{id}/objects/import/youtube", bucketHandler.ImportYouTube)
 			r.Get("/{id}/objects/download", bucketHandler.DownloadObject)
 			r.Post("/{id}/objects/presign", bucketHandler.PresignObject)
 			r.Get("/{id}/objects/metadata", bucketHandler.GetObjectMetadata)

@@ -9,6 +9,7 @@ import (
 	"bucketbird/backend/internal/storage"
 
 	"github.com/google/uuid"
+	"github.com/kkdai/youtube/v2"
 )
 
 type BucketService struct {
@@ -17,6 +18,7 @@ type BucketService struct {
 	users         repository.UserRepository
 	encryptionKey []byte
 	logger        *slog.Logger
+	youtubeClient *youtube.Client
 }
 
 func NewBucketService(
@@ -32,6 +34,7 @@ func NewBucketService(
 		users:         users,
 		encryptionKey: encryptionKey,
 		logger:        logger,
+		youtubeClient: &youtube.Client{},
 	}
 }
 
