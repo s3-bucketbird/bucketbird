@@ -117,6 +117,17 @@ type OperationResultResponse = {
   }
 }
 
+type BulkObjectOperationResponse = {
+  result: {
+    succeeded: number
+    failed: number
+    errors: Array<{
+      sourceKey: string
+      error: string
+    }>
+  }
+}
+
 type YouTubeImportResponse = {
   result: {
     kind: 'video' | 'playlist'
@@ -275,6 +286,11 @@ export type CopyObjectInput = {
   destinationKey: string
 }
 
+export type BulkObjectOperationItem = {
+  sourceKey: string
+  destinationKey: string
+}
+
 export type ObjectMetadata = MetadataResponse['metadata']
 
 export const api = {
@@ -335,6 +351,13 @@ export const api = {
     })
     return data.result
   },
+  async moveObjects(bucketId: string, items: BulkObjectOperationItem[]) {
+    const data = await request<BulkObjectOperationResponse>(`/api/v1/buckets/${bucketId}/objects/move`, {
+      method: 'POST',
+      body: { items },
+    })
+    return data.result
+  },
   async renameObject(bucketId: string, input: RenameObjectInput) {
     const data = await request<OperationResultResponse>(`/api/v1/buckets/${bucketId}/objects/rename`, {
       method: 'POST',
@@ -349,9 +372,16 @@ export const api = {
     })
     return data.result
   },
+  async copyObjectsBulk(bucketId: string, items: BulkObjectOperationItem[]) {
+    const data = await request<BulkObjectOperationResponse>(`/api/v1/buckets/${bucketId}/objects/copy/bulk`, {
+      method: 'POST',
+      body: { items },
+    })
+    return data.result
+  },
   async importYouTubeWithProgress(
     bucketId: string,
-    input: { url: string; destinationPrefix?: string },
+    input: { url: string; destinationPrefix?: string; cookieHeader?: string },
     onProgress?: (progress: YouTubeImportProgress) => void,
   ) {
     const url = new URL(
@@ -359,9 +389,12 @@ export const api = {
       API_BASE_URL,
     )
 
-    const payload = {
+    const payload: Record<string, string> = {
       url: input.url,
       destinationPrefix: input.destinationPrefix ?? '',
+    }
+    if (input.cookieHeader && input.cookieHeader.trim().length > 0) {
+      payload.cookieHeader = input.cookieHeader.trim()
     }
 
     const headers: Record<string, string> = {

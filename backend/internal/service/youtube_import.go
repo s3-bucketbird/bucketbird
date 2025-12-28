@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/cookiejar"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -18,6 +21,7 @@ import (
 type YouTubeImportInput struct {
 	URL               string
 	DestinationPrefix string
+	CookieHeader      string
 }
 
 type YouTubeImportProgress struct {
@@ -94,10 +98,9 @@ func (s *BucketService) ImportYouTube(
 		return nil, err
 	}
 
-	client := s.youtubeClient
-	if client == nil {
-		client = &youtube.Client{}
-		s.youtubeClient = client
+	client, err := s.getYouTubeClient(input.CookieHeader)
+	if err != nil {
+		return nil, err
 	}
 
 	result := &YouTubeImportResult{
@@ -502,6 +505,70 @@ func emitProgress(progress func(YouTubeImportProgress), event YouTubeImportProgr
 		return
 	}
 	progress(event)
+}
+
+func (s *BucketService) getYouTubeClient(cookieHeader string) (*youtube.Client, error) {
+	header := strings.TrimSpace(cookieHeader)
+	if header == "" {
+		if s.youtubeClient == nil {
+			s.youtubeClient = &youtube.Client{}
+		}
+		return s.youtubeClient, nil
+	}
+
+	cookies := parseCookieHeader(header)
+	if len(cookies) == 0 {
+		return nil, fmt.Errorf("no valid cookies found in header")
+	}
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cookie jar: %w", err)
+	}
+
+	targets := []string{
+		"https://www.youtube.com",
+		"https://m.youtube.com",
+		"https://www.google.com",
+		"https://www.googlevideo.com",
+	}
+
+	for _, target := range targets {
+		u, err := url.Parse(target)
+		if err != nil {
+			continue
+		}
+		jar.SetCookies(u, cookies)
+	}
+
+	return &youtube.Client{
+		HTTPClient: &http.Client{Jar: jar},
+	}, nil
+}
+
+func parseCookieHeader(header string) []*http.Cookie {
+	segments := strings.Split(header, ";")
+	cookies := make([]*http.Cookie, 0, len(segments))
+	for _, segment := range segments {
+		part := strings.TrimSpace(segment)
+		if part == "" {
+			continue
+		}
+		kv := strings.SplitN(part, "=", 2)
+		name := strings.TrimSpace(kv[0])
+		if name == "" {
+			continue
+		}
+		value := ""
+		if len(kv) == 2 {
+			value = strings.TrimSpace(kv[1])
+		}
+		cookies = append(cookies, &http.Cookie{
+			Name:  name,
+			Value: value,
+		})
+	}
+	return cookies
 }
 
 func isNotFoundError(err error) bool {

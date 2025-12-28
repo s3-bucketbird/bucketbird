@@ -5,10 +5,10 @@ import { useQueryClient, useQuery } from '@tanstack/react-query'
 
 import AppShell from '../components/layout/AppShell'
 import Button from '../components/ui/Button'
-import { api, type YouTubeImportProgress } from '../api/client'
+import { api, type BulkObjectOperationItem, type YouTubeImportProgress } from '../api/client'
 import { useBucketObjects } from '../hooks/useBucketObjects'
 import { useBuckets } from '../hooks/useBuckets'
-import { useCreateFolder, useDeleteObjects, useRenameObject, useCopyObject } from '../hooks/useObjectActions'
+import { useCreateFolder, useDeleteObjects, useRenameObject, useCopyObject, useMoveObjects, useCopyObjectsBulk } from '../hooks/useObjectActions'
 import { ConfirmDialog } from '../components/modals/ConfirmDialog'
 import { PromptDialog } from '../components/modals/PromptDialog'
 import { AlertDialog } from '../components/modals/AlertDialog'
@@ -38,6 +38,12 @@ const normalizeFolderInput = (value: string) => {
 const buildDestinationKey = (prefix: string, obj: BucketObject) => {
   const base = prefix ? `${prefix}${obj.name}` : obj.name
   return obj.kind === 'folder' ? ensureTrailingSlash(base) : base
+}
+
+const basenameFromKey = (key: string) => {
+  const trimmed = key.endsWith('/') ? key.slice(0, -1) : key
+  const index = trimmed.lastIndexOf('/')
+  return index >= 0 ? trimmed.slice(index+1) : trimmed
 }
 
 const parentPrefixOf = (key: string) => {
@@ -162,6 +168,7 @@ const BucketPage = () => {
   const [isYouTubeDialogOpen, setIsYouTubeDialogOpen] = useState(false)
   const [youtubeUrl, setYoutubeUrl] = useState('')
   const [youtubeDestination, setYoutubeDestination] = useState('')
+  const [youtubeCookieHeader, setYoutubeCookieHeader] = useState('')
   const [isImportingFromYouTube, setIsImportingFromYouTube] = useState(false)
   const [youtubeImportError, setYoutubeImportError] = useState<string | null>(null)
   const [youtubeProgressMessages, setYoutubeProgressMessages] = useState<string[]>([])
@@ -193,6 +200,7 @@ const BucketPage = () => {
     message: string
     variant?: 'error' | 'success' | 'info' | 'warning'
   }>({ isOpen: false, title: '', message: '' })
+  const [showYouTubeAdvanced, setShowYouTubeAdvanced] = useState(false)
 
   // Function to update prefix and URL
   const setPrefix = useCallback((newPrefix: string) => {
@@ -207,6 +215,8 @@ const BucketPage = () => {
   const deleteObjectsMutation = useDeleteObjects(bucketId, prefix)
   const renameObjectMutation = useRenameObject(bucketId, prefix)
   const copyObjectMutation = useCopyObject(bucketId, prefix)
+  const moveObjectsMutation = useMoveObjects(bucketId, prefix)
+  const copyObjectsBulkMutation = useCopyObjectsBulk(bucketId, prefix)
 
   const {
     data: objects = [],
@@ -290,6 +300,7 @@ const BucketPage = () => {
     setYoutubeProgressMessages([])
     setYoutubeVideoProgress({})
     setYoutubeProgressOrder([])
+    setShowYouTubeAdvanced(false)
     setIsYouTubeDialogOpen(true)
   }, [prefix])
 
@@ -300,6 +311,7 @@ const BucketPage = () => {
     setYoutubeProgressMessages([])
     setYoutubeVideoProgress({})
     setYoutubeProgressOrder([])
+    setShowYouTubeAdvanced(false)
   }, [isImportingFromYouTube])
 
   const handleSubmitYouTubeImport = useCallback(async (event: React.FormEvent<HTMLFormElement>) => {
@@ -327,6 +339,7 @@ const BucketPage = () => {
         {
           url: youtubeUrl.trim(),
           destinationPrefix: youtubeDestination.trim(),
+          cookieHeader: youtubeCookieHeader.trim(),
         },
         handleYouTubeProgress,
       )
@@ -372,7 +385,7 @@ const BucketPage = () => {
     } finally {
       setIsImportingFromYouTube(false)
     }
-  }, [bucketId, youtubeUrl, youtubeDestination, prefix, refetch, setAlertDialog, handleYouTubeProgress])
+  }, [bucketId, youtubeUrl, youtubeDestination, youtubeCookieHeader, prefix, refetch, setAlertDialog, handleYouTubeProgress])
 
   // Recursive search query
   const {
@@ -392,6 +405,14 @@ const BucketPage = () => {
   const displayIsError = searchQuery ? isSearchError : isError
   const displayError = searchQuery ? searchError : error
   const showUploadDropzone = isUploadPanelExpanded || isDragActive || isUploading
+
+  const objectsByKey = useMemo(() => {
+    const map = new Map<string, BucketObject>()
+    ;(objects ?? []).forEach((obj) => {
+      map.set(obj.key, obj)
+    })
+    return map
+  }, [objects])
 
   const fileCount = useMemo(() => {
     return displayObjects.filter((obj) => obj.kind === 'file').length
@@ -718,6 +739,149 @@ const BucketPage = () => {
     [copyObjectMutation],
   )
 
+  const computeBulkOperationItems = useCallback(
+    (inputPrefix: string) => {
+      const normalized = normalizeFolderInput(inputPrefix)
+      const errors: string[] = []
+      const items: BulkObjectOperationItem[] = []
+      const destinations = new Set<string>()
+
+      if (selectedKeys.size === 0) {
+        errors.push('No items selected.')
+        return { items, errors }
+      }
+
+      selectedKeys.forEach((key) => {
+        const obj = objectsByKey.get(key)
+        if (!obj) {
+          errors.push(`Unable to locate item "${key}".`)
+          return
+        }
+        const baseName = basenameFromKey(key)
+        let destinationKey = normalized ? `${normalized}${baseName}` : baseName
+        if (obj.kind === 'folder') {
+          destinationKey = ensureTrailingSlash(destinationKey)
+          if (destinationKey === obj.key || destinationKey.startsWith(obj.key)) {
+            errors.push(`Cannot target inside folder "${obj.name}".`)
+            return
+          }
+        } else if (destinationKey === obj.key) {
+          errors.push(`"${obj.name}" is already in that location.`)
+          return
+        }
+        if (destinations.has(destinationKey)) {
+          errors.push(`Destination conflict for "${baseName}".`)
+          return
+        }
+        destinations.add(destinationKey)
+        items.push({ sourceKey: obj.key, destinationKey })
+      })
+
+      return { items, errors }
+    },
+    [objectsByKey, selectedKeys],
+  )
+
+  const summarizeBulkResult = useCallback((
+    action: string,
+    result: { succeeded: number; failed: number; errors: Array<{ sourceKey: string; error: string }> },
+  ) => {
+    const parts = [`${result.succeeded} item${result.succeeded === 1 ? '' : 's'} ${action}.`]
+    if (result.failed > 0) {
+      parts.push(`${result.failed} failed.`)
+    }
+    if (result.errors.length > 0) {
+      const details = result.errors
+        .slice(0, 3)
+        .map((error) => `${error.sourceKey}: ${error.error}`)
+        .join(' ')
+      parts.push(details)
+    }
+    return parts.join(' ')
+  }, [])
+
+  const handleBulkMoveSelected = useCallback(() => {
+    if (selectedKeys.size === 0) return
+    setPromptDialog({
+      isOpen: true,
+      title: `Move ${selectedKeys.size} item${selectedKeys.size === 1 ? '' : 's'}`,
+      message: 'Enter the destination folder path. Leave blank to move to the root.',
+      placeholder: 'photos/2024/',
+      confirmText: 'Move',
+      allowEmpty: true,
+      onConfirm: async (input) => {
+        const { items, errors } = computeBulkOperationItems(input)
+        if (errors.length > 0 || items.length === 0) {
+          setAlertDialog({
+            isOpen: true,
+            title: 'Move Failed',
+            message: errors.length > 0 ? errors.join(' ') : 'No valid items to move.',
+            variant: 'error',
+          })
+          return
+        }
+        try {
+          const result = await moveObjectsMutation.mutateAsync(items)
+          setAlertDialog({
+            isOpen: true,
+            title: result.failed > 0 ? 'Move completed with warnings' : 'Move complete',
+            message: summarizeBulkResult('moved', result),
+            variant: result.failed > 0 ? 'warning' : 'success',
+          })
+          setSelectedKeys(new Set())
+        } catch (err) {
+          setAlertDialog({
+            isOpen: true,
+            title: 'Move Failed',
+            message: (err as Error).message,
+            variant: 'error',
+          })
+        }
+      },
+    })
+  }, [selectedKeys.size, computeBulkOperationItems, moveObjectsMutation, summarizeBulkResult, setAlertDialog, setSelectedKeys])
+
+  const handleBulkCopySelected = useCallback(() => {
+    if (selectedKeys.size === 0) return
+    setPromptDialog({
+      isOpen: true,
+      title: `Copy ${selectedKeys.size} item${selectedKeys.size === 1 ? '' : 's'}`,
+      message: 'Enter the destination folder path. Leave blank to copy to the root.',
+      placeholder: 'photos/2024/',
+      confirmText: 'Copy',
+      allowEmpty: true,
+      onConfirm: async (input) => {
+        const { items, errors } = computeBulkOperationItems(input)
+        if (errors.length > 0 || items.length === 0) {
+          setAlertDialog({
+            isOpen: true,
+            title: 'Copy Failed',
+            message: errors.length > 0 ? errors.join(' ') : 'No valid items to copy.',
+            variant: 'error',
+          })
+          return
+        }
+        try {
+          const result = await copyObjectsBulkMutation.mutateAsync(items)
+          setAlertDialog({
+            isOpen: true,
+            title: result.failed > 0 ? 'Copy completed with warnings' : 'Copy complete',
+            message: summarizeBulkResult('copied', result),
+            variant: result.failed > 0 ? 'warning' : 'success',
+          })
+          setSelectedKeys(new Set())
+        } catch (err) {
+          setAlertDialog({
+            isOpen: true,
+            title: 'Copy Failed',
+            message: (err as Error).message,
+            variant: 'error',
+          })
+        }
+      },
+    })
+  }, [selectedKeys.size, computeBulkOperationItems, copyObjectsBulkMutation, summarizeBulkResult, setAlertDialog, setSelectedKeys])
+
   const handleDownloadObject = useCallback(
     async (key: string, name: string, isFolder: boolean) => {
       try {
@@ -989,6 +1153,8 @@ const BucketPage = () => {
     deleteObjectsMutation.isPending ||
     renameObjectMutation.isPending ||
     copyObjectMutation.isPending ||
+    moveObjectsMutation.isPending ||
+    copyObjectsBulkMutation.isPending ||
     isUploading
 
   return (
@@ -998,15 +1164,35 @@ const BucketPage = () => {
         <h1 className="text-3xl font-bold text-slate-900 dark:text-white">{bucketMeta?.name ?? bucketId}</h1>
         <div className="flex flex-wrap gap-2">
           {selectedKeys.size > 0 && (
-            <Button
-              variant="outline"
-              className="border-red-300 text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
-              onClick={handleBulkDelete}
-              disabled={deleteObjectsMutation.isPending}
-            >
-              <span className="material-symbols-outlined text-xl">delete</span>
-              <span className="truncate">Delete ({selectedKeys.size})</span>
-            </Button>
+            <>
+              <Button
+                variant="outline"
+                className="border-red-300 text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
+                onClick={handleBulkDelete}
+                disabled={deleteObjectsMutation.isPending}
+              >
+                <span className="material-symbols-outlined text-xl">delete</span>
+                <span className="truncate">Delete ({selectedKeys.size})</span>
+              </Button>
+              <Button
+                variant="outline"
+                className="border-slate-300 text-slate-800 hover:bg-slate-50 dark:border-slate-700 dark:text-white dark:hover:bg-slate-800"
+                onClick={handleBulkMoveSelected}
+                disabled={moveObjectsMutation.isPending}
+              >
+                <span className="material-symbols-outlined text-xl">drive_file_move</span>
+                <span className="truncate">Move ({selectedKeys.size})</span>
+              </Button>
+              <Button
+                variant="outline"
+                className="border-slate-300 text-slate-800 hover:bg-slate-50 dark:border-slate-700 dark:text-white dark:hover:bg-slate-800"
+                onClick={handleBulkCopySelected}
+                disabled={copyObjectsBulkMutation.isPending}
+              >
+                <span className="material-symbols-outlined text-xl">content_copy</span>
+                <span className="truncate">Copy ({selectedKeys.size})</span>
+              </Button>
+            </>
           )}
           <Button
             variant="outline"
@@ -1652,6 +1838,36 @@ const BucketPage = () => {
                 <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                   Leave blank to save files to the bucket root. Use "/" to create nested folders.
                 </p>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-3 text-sm dark:border-slate-700 dark:bg-slate-800/40">
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between text-left font-medium text-slate-700 transition-colors hover:text-primary dark:text-slate-100"
+                  onClick={() => setShowYouTubeAdvanced((prev) => !prev)}
+                >
+                  <span>Advanced options</span>
+                  <span className="material-symbols-outlined text-base">
+                    {showYouTubeAdvanced ? 'expand_less' : 'expand_more'}
+                  </span>
+                </button>
+                {showYouTubeAdvanced && (
+                  <div className="mt-3 space-y-2">
+                    <label className="block text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">
+                      YouTube cookies (optional)
+                    </label>
+                    <textarea
+                      rows={3}
+                      value={youtubeCookieHeader}
+                      onChange={(e) => setYoutubeCookieHeader(e.target.value)}
+                      placeholder="Paste the Cookie header from an authenticated YouTube tab (e.g. YSC=...; VISITOR_INFO1_LIVE=...; __Secure-3PAPISID=...)"
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-500"
+                    />
+                    <p className="text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+                      Required only for age-restricted or blocked videos. We never store this value; it is sent with this import request
+                      so YouTube treats the download like your signed-in browser session.
+                    </p>
+                  </div>
+                )}
               </div>
               {youtubeImportError && (
                 <p className="text-sm text-red-600 dark:text-red-400">{youtubeImportError}</p>

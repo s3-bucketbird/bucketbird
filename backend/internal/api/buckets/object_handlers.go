@@ -21,6 +21,11 @@ const maxMultipartUploadSize int64 = 5 * 1024 * 1024 * 1024 // 5 GiB
 type YouTubeImportRequest struct {
 	URL               string `json:"url"`
 	DestinationPrefix string `json:"destinationPrefix"`
+	CookieHeader      string `json:"cookieHeader"`
+}
+
+type bulkObjectOperationRequest struct {
+	Items []service.BulkObjectOperationItem `json:"items"`
 }
 
 // ListObjects lists objects in a bucket
@@ -213,6 +218,7 @@ func (h *Handler) ImportYouTube(w http.ResponseWriter, r *http.Request) {
 			service.YouTubeImportInput{
 				URL:               req.URL,
 				DestinationPrefix: req.DestinationPrefix,
+				CookieHeader:      req.CookieHeader,
 			},
 			h.encryptionKey,
 			progressFn,
@@ -238,6 +244,7 @@ func (h *Handler) ImportYouTube(w http.ResponseWriter, r *http.Request) {
 		service.YouTubeImportInput{
 			URL:               req.URL,
 			DestinationPrefix: req.DestinationPrefix,
+			CookieHeader:      req.CookieHeader,
 		},
 		h.encryptionKey,
 		nil,
@@ -507,6 +514,76 @@ func (h *Handler) CopyObject(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.logger.Error("failed to copy object", slog.Any("error", err))
 		h.respondError(w, "Failed to copy object", http.StatusInternalServerError)
+		return
+	}
+
+	h.respondJSON(w, map[string]interface{}{"result": result}, http.StatusOK)
+}
+
+// MoveObjects handles bulk move operations
+func (h *Handler) MoveObjects(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.GetUserIDFromContext(r.Context())
+	if !ok {
+		h.respondError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	bucketID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		h.respondError(w, "Invalid bucket ID", http.StatusBadRequest)
+		return
+	}
+
+	var req bulkObjectOperationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.respondError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.Items) == 0 {
+		h.respondError(w, "At least one item is required", http.StatusBadRequest)
+		return
+	}
+
+	result, svcErr := h.bucketService.MoveObjects(r.Context(), bucketID, userID, req.Items, h.encryptionKey)
+	if svcErr != nil {
+		h.logger.Error("bulk move failed", slog.Any("error", svcErr))
+		h.respondError(w, "Failed to move objects", http.StatusInternalServerError)
+		return
+	}
+
+	h.respondJSON(w, map[string]interface{}{"result": result}, http.StatusOK)
+}
+
+// CopyObjectsBulk handles bulk copy operations
+func (h *Handler) CopyObjectsBulk(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.GetUserIDFromContext(r.Context())
+	if !ok {
+		h.respondError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	bucketID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		h.respondError(w, "Invalid bucket ID", http.StatusBadRequest)
+		return
+	}
+
+	var req bulkObjectOperationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.respondError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.Items) == 0 {
+		h.respondError(w, "At least one item is required", http.StatusBadRequest)
+		return
+	}
+
+	result, svcErr := h.bucketService.CopyObjectsBulk(r.Context(), bucketID, userID, req.Items, h.encryptionKey)
+	if svcErr != nil {
+		h.logger.Error("bulk copy failed", slog.Any("error", svcErr))
+		h.respondError(w, "Failed to copy objects", http.StatusInternalServerError)
 		return
 	}
 

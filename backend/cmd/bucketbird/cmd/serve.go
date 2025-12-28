@@ -163,6 +163,7 @@ func runServe(cmd *cobra.Command, args []string) {
 			r.Get("/{id}/objects/search", bucketHandler.SearchObjects)
 			r.Post("/{id}/objects/upload", bucketHandler.UploadObject)
 			r.Post("/{id}/objects/import/youtube", bucketHandler.ImportYouTube)
+			r.Post("/{id}/objects/move", bucketHandler.MoveObjects)
 			r.Get("/{id}/objects/download", bucketHandler.DownloadObject)
 			r.Post("/{id}/objects/presign", bucketHandler.PresignObject)
 			r.Get("/{id}/objects/metadata", bucketHandler.GetObjectMetadata)
@@ -170,6 +171,7 @@ func runServe(cmd *cobra.Command, args []string) {
 			r.Post("/{id}/objects/delete", bucketHandler.DeleteObjects)
 			r.Post("/{id}/objects/rename", bucketHandler.RenameObject)
 			r.Post("/{id}/objects/copy", bucketHandler.CopyObject)
+			r.Post("/{id}/objects/copy/bulk", bucketHandler.CopyObjectsBulk)
 		})
 
 		// Credential routes

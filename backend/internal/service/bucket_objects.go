@@ -70,6 +70,22 @@ type OperationResult struct {
 	Message string `json:"message"`
 }
 
+type BulkObjectOperationItem struct {
+	SourceKey      string `json:"sourceKey"`
+	DestinationKey string `json:"destinationKey"`
+}
+
+type BulkObjectOperationError struct {
+	SourceKey string `json:"sourceKey"`
+	Error     string `json:"error"`
+}
+
+type BulkObjectOperationResult struct {
+	Succeeded int                        `json:"succeeded"`
+	Failed    int                        `json:"failed"`
+	Errors    []BulkObjectOperationError `json:"errors"`
+}
+
 // FolderResult represents a created folder
 type FolderResult struct {
 	Key string `json:"key"`
@@ -661,6 +677,78 @@ func (s *BucketService) CopyObject(ctx context.Context, bucketID, userID uuid.UU
 		Success: true,
 		Message: "Object copied successfully",
 	}, nil
+}
+
+// MoveObjects performs multiple rename operations in a single call
+func (s *BucketService) MoveObjects(ctx context.Context, bucketID, userID uuid.UUID, items []BulkObjectOperationItem, encryptionKey []byte) (*BulkObjectOperationResult, error) {
+	result := &BulkObjectOperationResult{
+		Errors: make([]BulkObjectOperationError, 0),
+	}
+	for _, item := range items {
+		source := strings.TrimSpace(item.SourceKey)
+		destination := strings.TrimSpace(item.DestinationKey)
+		if source == "" || destination == "" {
+			result.Errors = append(result.Errors, BulkObjectOperationError{
+				SourceKey: item.SourceKey,
+				Error:     "source and destination are required",
+			})
+			continue
+		}
+		opResult, err := s.RenameObject(ctx, bucketID, userID, source, destination, encryptionKey)
+		if err != nil {
+			result.Errors = append(result.Errors, BulkObjectOperationError{
+				SourceKey: source,
+				Error:     err.Error(),
+			})
+			continue
+		}
+		if !opResult.Success {
+			result.Errors = append(result.Errors, BulkObjectOperationError{
+				SourceKey: source,
+				Error:     opResult.Message,
+			})
+			continue
+		}
+		result.Succeeded++
+	}
+	result.Failed = len(result.Errors)
+	return result, nil
+}
+
+// CopyObjectsBulk performs multiple copy operations in a single call
+func (s *BucketService) CopyObjectsBulk(ctx context.Context, bucketID, userID uuid.UUID, items []BulkObjectOperationItem, encryptionKey []byte) (*BulkObjectOperationResult, error) {
+	result := &BulkObjectOperationResult{
+		Errors: make([]BulkObjectOperationError, 0),
+	}
+	for _, item := range items {
+		source := strings.TrimSpace(item.SourceKey)
+		destination := strings.TrimSpace(item.DestinationKey)
+		if source == "" || destination == "" {
+			result.Errors = append(result.Errors, BulkObjectOperationError{
+				SourceKey: item.SourceKey,
+				Error:     "source and destination are required",
+			})
+			continue
+		}
+		opResult, err := s.CopyObject(ctx, bucketID, userID, source, destination, encryptionKey)
+		if err != nil {
+			result.Errors = append(result.Errors, BulkObjectOperationError{
+				SourceKey: source,
+				Error:     err.Error(),
+			})
+			continue
+		}
+		if !opResult.Success {
+			result.Errors = append(result.Errors, BulkObjectOperationError{
+				SourceKey: source,
+				Error:     opResult.Message,
+			})
+			continue
+		}
+		result.Succeeded++
+	}
+	result.Failed = len(result.Errors)
+	return result, nil
 }
 
 // ZipFolder creates a zip archive of a folder
