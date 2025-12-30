@@ -1200,6 +1200,15 @@ const BucketPage = () => {
           <Button
             variant="outline"
             className="border-slate-300 text-slate-800 hover:bg-slate-50 dark:border-slate-700 dark:text-white dark:hover:bg-slate-800"
+            onClick={() => refetch()}
+            disabled={isFetching || isActionPending}
+          >
+            <span className={`material-symbols-outlined text-xl ${isFetching ? 'animate-spin' : ''}`}>refresh</span>
+            <span className="truncate">Refresh</span>
+          </Button>
+          <Button
+            variant="outline"
+            className="border-slate-300 text-slate-800 hover:bg-slate-50 dark:border-slate-700 dark:text-white dark:hover:bg-slate-800"
             onClick={handleCreateFolder}
             disabled={isActionPending}
           >
@@ -1886,7 +1895,7 @@ const BucketPage = () => {
                     Import progress
                   </div>
                   {youtubeProgressOrder.length > 0 && (
-                    <div className="space-y-3">
+                    <div className="max-h-96 space-y-3 overflow-y-auto">
                       {youtubeProgressOrder.map((videoId) => {
                         const entry = youtubeVideoProgress[videoId]
                         if (!entry) return null
