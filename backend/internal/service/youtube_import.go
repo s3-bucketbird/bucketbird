@@ -85,6 +85,10 @@ func parseSize(sizeStr string) (int64, error) {
 
 	// Remove leading ~ if present (approximate size)
 	sizeStr = strings.TrimPrefix(sizeStr, "~")
+	sizeStr = strings.TrimSpace(sizeStr)
+
+	// Remove all internal whitespace (e.g., "  50.64MiB" becomes "50.64MiB")
+	sizeStr = strings.ReplaceAll(sizeStr, " ", "")
 
 	var multiplier int64 = 1
 	var numStr string
@@ -133,6 +137,9 @@ func parseSpeed(speedStr string) (float64, error) {
 		return 0, nil
 	}
 
+	// Remove all internal whitespace
+	speedStr = strings.ReplaceAll(speedStr, " ", "")
+
 	// Remove /s suffix
 	speedStr = strings.TrimSuffix(speedStr, "/s")
 
@@ -146,7 +153,8 @@ func parseSpeed(speedStr string) (float64, error) {
 
 // progressLineRegex matches yt-dlp progress output like:
 // [download]   12.5% of ~10.50MiB at  1.23MiB/s ETA 00:08
-var progressLineRegex = regexp.MustCompile(`\[download\]\s+(\d+\.?\d*)%\s+of\s+(~?[\d.]+\w+)(?:\s+at\s+([\d.]+\w+/s))?`)
+// [download]  99.2% of ~  50.64MiB at    6.65MiB/s ETA 00:00 (frag 247/248)
+var progressLineRegex = regexp.MustCompile(`\[download\]\s+(\d+\.?\d*)%\s+of\s+~?\s*([\d.]+\s*\w+)(?:.*?at\s+([\d.]+\s*\w+/s))?`)
 
 // parseProgressLine parses a yt-dlp progress line and returns percent, total bytes, and speed
 func parseProgressLine(line string) (percent float64, totalBytes int64, speed float64, ok bool) {
@@ -249,22 +257,19 @@ func (s *BucketService) downloadYouTubeVideoViaSubprocess(
 	// Read stdout for progress
 	scanner := bufio.NewScanner(stdout)
 	var lastTotalBytes int64
-	lineCount := 0
 	progressCount := 0
 	for scanner.Scan() {
 		line := scanner.Text()
-		lineCount++
-		s.logger.Info("yt-dlp stdout", "line", line, "line_number", lineCount)
+		s.logger.Debug("yt-dlp stdout", "line", line)
 
 		// Parse progress line
 		percent, totalBytes, speed, ok := parseProgressLine(line)
 		if ok {
 			progressCount++
-			s.logger.Info("parsed progress",
+			s.logger.Debug("parsed progress",
 				"percent", percent,
 				"total_bytes", totalBytes,
 				"speed", speed,
-				"progress_count", progressCount,
 			)
 
 			if progressCallback != nil {
@@ -277,22 +282,12 @@ func (s *BucketService) downloadYouTubeVideoViaSubprocess(
 				// Calculate bytes downloaded from percentage
 				bytesRead := int64(float64(totalBytes) * (percent / 100.0))
 
-				s.logger.Info("calling progress callback",
-					"bytes_read", bytesRead,
-					"total_bytes", totalBytes,
-					"speed", speed,
-				)
 				progressCallback(bytesRead, totalBytes, speed)
-			} else {
-				s.logger.Warn("progress callback is nil")
 			}
 		}
 	}
 
-	s.logger.Info("finished reading yt-dlp output",
-		"total_lines", lineCount,
-		"progress_lines", progressCount,
-	)
+	s.logger.Info("finished reading yt-dlp output", "progress_updates", progressCount)
 
 	// Wait for stderr reader to finish
 	<-stderrDone
