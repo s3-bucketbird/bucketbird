@@ -112,12 +112,17 @@ func (s *BucketService) ImportYouTube(
 
 	// Determine which cookie to use: request cookie or stored cookie
 	cookieHeader := input.CookieHeader
+	cookieSource := "request"
 	if cookieHeader == "" {
 		// Try to get stored cookie from user profile
 		profile, err := s.profiles.GetByUserID(ctx, userID)
 		if err == nil && profile.YoutubeCookie != nil && *profile.YoutubeCookie != "" {
 			cookieHeader = *profile.YoutubeCookie
-			s.logger.Info("using stored youtube cookie for user", "user_id", userID.String())
+			cookieSource = "profile"
+			s.logger.Info("using stored youtube cookie for user",
+				"user_id", userID.String(),
+				"cookie_length", len(cookieHeader),
+			)
 		}
 	}
 
@@ -130,6 +135,21 @@ func (s *BucketService) ImportYouTube(
 		}
 		cookieFile = tmpFile
 		defer os.Remove(cookieFile)
+
+		// Log cookie file details for debugging
+		s.logger.Info("created cookie file",
+			"source", cookieSource,
+			"file_path", cookieFile,
+		)
+
+		// Read and log the first 500 characters of the cookie file for debugging
+		if content, err := os.ReadFile(cookieFile); err == nil {
+			preview := string(content)
+			if len(preview) > 500 {
+				preview = preview[:500] + "..."
+			}
+			s.logger.Info("cookie file content preview", "content", preview)
+		}
 	}
 
 	videos, kind, err := s.resolveYouTubeVideos(ctx, url, cookieFile, result, progress)
@@ -286,6 +306,16 @@ func (s *BucketService) resolveYouTubeVideos(
 
 	if cookieFile != "" {
 		opts.Cookies = cookieFile
+		s.logger.Info("resolving youtube url with cookies",
+			"url", url,
+			"cookie_file", cookieFile,
+			"yt-dlp_command", fmt.Sprintf("yt-dlp --cookies %s %s", cookieFile, url),
+		)
+	} else {
+		s.logger.Info("resolving youtube url without cookies",
+			"url", url,
+			"yt-dlp_command", fmt.Sprintf("yt-dlp %s", url),
+		)
 	}
 
 	gResult, err := goutubedl.New(ctx, url, opts)
@@ -493,6 +523,22 @@ func (s *BucketService) downloadYouTubeVideo(
 
 	// Build a URL for this specific video
 	videoURL := fmt.Sprintf("https://www.youtube.com/watch?v=%s", video.ID)
+
+	if cookieFile != "" {
+		s.logger.Info("downloading youtube video with cookies",
+			"video_id", video.ID,
+			"title", video.Title,
+			"cookie_file", cookieFile,
+			"yt-dlp_command", fmt.Sprintf("yt-dlp --cookies %s %s", cookieFile, videoURL),
+		)
+	} else {
+		s.logger.Info("downloading youtube video without cookies",
+			"video_id", video.ID,
+			"title", video.Title,
+			"yt-dlp_command", fmt.Sprintf("yt-dlp %s", videoURL),
+		)
+	}
+
 	gResult, err := goutubedl.New(ctx, videoURL, opts)
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to initialize download: %w", err)
@@ -600,43 +646,10 @@ func createCookieFile(cookieHeader string) (string, error) {
 	}
 	defer tmpFile.Close()
 
-	// Write Netscape cookie file header
-	_, err = tmpFile.WriteString("# Netscape HTTP Cookie File\n")
+	// Write cookie header directly to file
+	_, err = tmpFile.WriteString(cookieHeader)
 	if err != nil {
 		return "", err
-	}
-
-	// Parse cookie header and convert to Netscape format
-	cookies := strings.Split(cookieHeader, ";")
-	for _, cookie := range cookies {
-		cookie = strings.TrimSpace(cookie)
-		if cookie == "" {
-			continue
-		}
-
-		parts := strings.SplitN(cookie, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-
-		name := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[1])
-
-		if name == "" {
-			continue
-		}
-
-		// Netscape format: domain	flag	path	secure	expiration	name	value
-		// Using .youtube.com to make cookies work for all YouTube domains
-		line := fmt.Sprintf(".youtube.com\tTRUE\t/\tTRUE\t%d\t%s\t%s\n",
-			time.Now().Add(365*24*time.Hour).Unix(), // Expire in 1 year
-			name,
-			value,
-		)
-		_, err = tmpFile.WriteString(line)
-		if err != nil {
-			return "", err
-		}
 	}
 
 	return tmpFile.Name(), nil

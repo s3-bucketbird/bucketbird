@@ -12,6 +12,7 @@ import { useCreateFolder, useDeleteObjects, useRenameObject, useCopyObject, useM
 import { ConfirmDialog } from '../components/modals/ConfirmDialog'
 import { PromptDialog } from '../components/modals/PromptDialog'
 import { AlertDialog } from '../components/modals/AlertDialog'
+import { FolderPickerDialog } from '../components/modals/FolderPickerDialog'
 
 type BucketObject = {
   key: string
@@ -200,6 +201,16 @@ const BucketPage = () => {
     message: string
     variant?: 'error' | 'success' | 'info' | 'warning'
   }>({ isOpen: false, title: '', message: '' })
+
+  const [folderPickerDialog, setFolderPickerDialog] = useState<{
+    isOpen: boolean
+    title: string
+    message?: string
+    confirmText?: string
+    excludeFolders?: string[]
+    onConfirm: (folderPath: string) => void
+  }>({ isOpen: false, title: '', onConfirm: () => {} })
+
   const [showYouTubeAdvanced, setShowYouTubeAdvanced] = useState(false)
 
   // Function to update prefix and URL
@@ -646,16 +657,14 @@ const BucketPage = () => {
   const handleMoveObject = useCallback(
     (obj: BucketObject) => {
       setOpenObjectMenu(null)
-      setPromptDialog({
+      setFolderPickerDialog({
         isOpen: true,
         title: 'Move Item',
-        message: 'Enter the destination folder path. Leave blank to move to the root.',
-        defaultValue: parentPrefixOf(obj.key),
-        placeholder: 'photos/2024/',
+        message: 'Select the destination folder. Choose root to move to the top level.',
         confirmText: 'Move',
-        allowEmpty: true,
-        onConfirm: async (input) => {
-          const normalizedPrefix = normalizeFolderInput(input)
+        excludeFolders: obj.kind === 'folder' ? [obj.key] : [],
+        onConfirm: async (folderPath) => {
+          const normalizedPrefix = normalizeFolderInput(folderPath)
           const destinationKey = buildDestinationKey(normalizedPrefix, obj)
           if (destinationKey === obj.key) {
             setAlertDialog({
@@ -694,16 +703,14 @@ const BucketPage = () => {
   const handleCopyObject = useCallback(
     (obj: BucketObject) => {
       setOpenObjectMenu(null)
-      setPromptDialog({
+      setFolderPickerDialog({
         isOpen: true,
         title: 'Copy Item',
-        message: 'Enter the folder where the copy should be placed. Leave blank to copy to the root.',
-        defaultValue: parentPrefixOf(obj.key),
-        placeholder: 'photos/2024/',
+        message: 'Select the destination folder for the copy. Choose root to copy to the top level.',
         confirmText: 'Copy',
-        allowEmpty: true,
-        onConfirm: async (input) => {
-          const normalizedPrefix = normalizeFolderInput(input)
+        excludeFolders: obj.kind === 'folder' ? [obj.key] : [],
+        onConfirm: async (folderPath) => {
+          const normalizedPrefix = normalizeFolderInput(folderPath)
           const destinationKey = buildDestinationKey(normalizedPrefix, obj)
           if (destinationKey === obj.key) {
             setAlertDialog({
@@ -802,15 +809,13 @@ const BucketPage = () => {
 
   const handleBulkMoveSelected = useCallback(() => {
     if (selectedKeys.size === 0) return
-    setPromptDialog({
+    setFolderPickerDialog({
       isOpen: true,
       title: `Move ${selectedKeys.size} item${selectedKeys.size === 1 ? '' : 's'}`,
-      message: 'Enter the destination folder path. Leave blank to move to the root.',
-      placeholder: 'photos/2024/',
+      message: 'Select the destination folder. Choose root to move to the top level.',
       confirmText: 'Move',
-      allowEmpty: true,
-      onConfirm: async (input) => {
-        const { items, errors } = computeBulkOperationItems(input)
+      onConfirm: async (folderPath) => {
+        const { items, errors } = computeBulkOperationItems(folderPath)
         if (errors.length > 0 || items.length === 0) {
           setAlertDialog({
             isOpen: true,
@@ -843,15 +848,13 @@ const BucketPage = () => {
 
   const handleBulkCopySelected = useCallback(() => {
     if (selectedKeys.size === 0) return
-    setPromptDialog({
+    setFolderPickerDialog({
       isOpen: true,
       title: `Copy ${selectedKeys.size} item${selectedKeys.size === 1 ? '' : 's'}`,
-      message: 'Enter the destination folder path. Leave blank to copy to the root.',
-      placeholder: 'photos/2024/',
+      message: 'Select the destination folder. Choose root to copy to the top level.',
       confirmText: 'Copy',
-      allowEmpty: true,
-      onConfirm: async (input) => {
-        const { items, errors } = computeBulkOperationItems(input)
+      onConfirm: async (folderPath) => {
+        const { items, errors } = computeBulkOperationItems(folderPath)
         if (errors.length > 0 || items.length === 0) {
           setAlertDialog({
             isOpen: true,
@@ -2009,6 +2012,17 @@ const BucketPage = () => {
         title={alertDialog.title}
         message={alertDialog.message}
         variant={alertDialog.variant}
+      />
+
+      <FolderPickerDialog
+        isOpen={folderPickerDialog.isOpen}
+        onClose={() => setFolderPickerDialog({ ...folderPickerDialog, isOpen: false })}
+        onConfirm={folderPickerDialog.onConfirm}
+        bucketId={bucketId}
+        title={folderPickerDialog.title}
+        message={folderPickerDialog.message}
+        confirmText={folderPickerDialog.confirmText}
+        excludeFolders={folderPickerDialog.excludeFolders}
       />
     </AppShell>
   )
