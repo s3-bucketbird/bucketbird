@@ -249,25 +249,50 @@ func (s *BucketService) downloadYouTubeVideoViaSubprocess(
 	// Read stdout for progress
 	scanner := bufio.NewScanner(stdout)
 	var lastTotalBytes int64
+	lineCount := 0
+	progressCount := 0
 	for scanner.Scan() {
 		line := scanner.Text()
-		s.logger.Debug("yt-dlp stdout", "line", line)
+		lineCount++
+		s.logger.Info("yt-dlp stdout", "line", line, "line_number", lineCount)
 
 		// Parse progress line
 		percent, totalBytes, speed, ok := parseProgressLine(line)
-		if ok && progressCallback != nil {
-			if totalBytes > 0 {
-				lastTotalBytes = totalBytes
-			} else if lastTotalBytes > 0 {
-				totalBytes = lastTotalBytes
+		if ok {
+			progressCount++
+			s.logger.Info("parsed progress",
+				"percent", percent,
+				"total_bytes", totalBytes,
+				"speed", speed,
+				"progress_count", progressCount,
+			)
+
+			if progressCallback != nil {
+				if totalBytes > 0 {
+					lastTotalBytes = totalBytes
+				} else if lastTotalBytes > 0 {
+					totalBytes = lastTotalBytes
+				}
+
+				// Calculate bytes downloaded from percentage
+				bytesRead := int64(float64(totalBytes) * (percent / 100.0))
+
+				s.logger.Info("calling progress callback",
+					"bytes_read", bytesRead,
+					"total_bytes", totalBytes,
+					"speed", speed,
+				)
+				progressCallback(bytesRead, totalBytes, speed)
+			} else {
+				s.logger.Warn("progress callback is nil")
 			}
-
-			// Calculate bytes downloaded from percentage
-			bytesRead := int64(float64(totalBytes) * (percent / 100.0))
-
-			progressCallback(bytesRead, totalBytes, speed)
 		}
 	}
+
+	s.logger.Info("finished reading yt-dlp output",
+		"total_lines", lineCount,
+		"progress_lines", progressCount,
+	)
 
 	// Wait for stderr reader to finish
 	<-stderrDone
