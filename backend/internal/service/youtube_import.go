@@ -1,12 +1,15 @@
 package service
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -72,6 +75,219 @@ const (
 	youtubeVideoIDMetadataKey    = "bucketbird-video-id"
 	youtubeVideoTitleMetadataKey = "bucketbird-video-title"
 )
+
+// parseSize converts size strings like "10.50MiB" or "1.5GiB" to bytes
+func parseSize(sizeStr string) (int64, error) {
+	sizeStr = strings.TrimSpace(sizeStr)
+	if sizeStr == "" {
+		return 0, fmt.Errorf("empty size string")
+	}
+
+	// Remove leading ~ if present (approximate size)
+	sizeStr = strings.TrimPrefix(sizeStr, "~")
+
+	var multiplier int64 = 1
+	var numStr string
+
+	// Extract unit and number
+	switch {
+	case strings.HasSuffix(sizeStr, "GiB"):
+		multiplier = 1024 * 1024 * 1024
+		numStr = strings.TrimSuffix(sizeStr, "GiB")
+	case strings.HasSuffix(sizeStr, "MiB"):
+		multiplier = 1024 * 1024
+		numStr = strings.TrimSuffix(sizeStr, "MiB")
+	case strings.HasSuffix(sizeStr, "KiB"):
+		multiplier = 1024
+		numStr = strings.TrimSuffix(sizeStr, "KiB")
+	case strings.HasSuffix(sizeStr, "GB"):
+		multiplier = 1000 * 1000 * 1000
+		numStr = strings.TrimSuffix(sizeStr, "GB")
+	case strings.HasSuffix(sizeStr, "MB"):
+		multiplier = 1000 * 1000
+		numStr = strings.TrimSuffix(sizeStr, "MB")
+	case strings.HasSuffix(sizeStr, "KB"):
+		multiplier = 1000
+		numStr = strings.TrimSuffix(sizeStr, "KB")
+	case strings.HasSuffix(sizeStr, "B"):
+		multiplier = 1
+		numStr = strings.TrimSuffix(sizeStr, "B")
+	default:
+		// Assume bytes if no unit
+		numStr = sizeStr
+	}
+
+	numStr = strings.TrimSpace(numStr)
+	num, err := strconv.ParseFloat(numStr, 64)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse size number %q: %w", numStr, err)
+	}
+
+	return int64(num * float64(multiplier)), nil
+}
+
+// parseSpeed converts speed strings like "1.23MiB/s" to bytes per second
+func parseSpeed(speedStr string) (float64, error) {
+	speedStr = strings.TrimSpace(speedStr)
+	if speedStr == "" {
+		return 0, nil
+	}
+
+	// Remove /s suffix
+	speedStr = strings.TrimSuffix(speedStr, "/s")
+
+	bytes, err := parseSize(speedStr)
+	if err != nil {
+		return 0, err
+	}
+
+	return float64(bytes), nil
+}
+
+// progressLineRegex matches yt-dlp progress output like:
+// [download]   12.5% of ~10.50MiB at  1.23MiB/s ETA 00:08
+var progressLineRegex = regexp.MustCompile(`\[download\]\s+(\d+\.?\d*)%\s+of\s+(~?[\d.]+\w+)(?:\s+at\s+([\d.]+\w+/s))?`)
+
+// parseProgressLine parses a yt-dlp progress line and returns percent, total bytes, and speed
+func parseProgressLine(line string) (percent float64, totalBytes int64, speed float64, ok bool) {
+	matches := progressLineRegex.FindStringSubmatch(line)
+	if len(matches) < 3 {
+		return 0, 0, 0, false
+	}
+
+	// Parse percentage
+	percent, err := strconv.ParseFloat(matches[1], 64)
+	if err != nil {
+		return 0, 0, 0, false
+	}
+
+	// Parse total size
+	totalBytes, err = parseSize(matches[2])
+	if err != nil {
+		return 0, 0, 0, false
+	}
+
+	// Parse speed (optional)
+	if len(matches) > 3 && matches[3] != "" {
+		speed, _ = parseSpeed(matches[3])
+	}
+
+	return percent, totalBytes, speed, true
+}
+
+// buildYtDlpCommand constructs the yt-dlp command with appropriate flags
+func buildYtDlpCommand(ctx context.Context, videoURL, outputPath, cookieFile string) *exec.Cmd {
+	args := []string{
+		"--newline",         // Print progress on separate lines
+		"--no-playlist",     // Download only single video (not playlist)
+		"-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best", // Format selection
+		"-o", outputPath,    // Output path
+		"--no-mtime",        // Don't set file modification time
+		"--no-continue",     // Don't resume partial downloads
+	}
+
+	if cookieFile != "" {
+		args = append(args, "--cookies", cookieFile)
+	}
+
+	args = append(args, videoURL)
+
+	cmd := exec.CommandContext(ctx, "yt-dlp", args...)
+	return cmd
+}
+
+// downloadYouTubeVideoViaSubprocess downloads a video using yt-dlp subprocess and streams progress
+func (s *BucketService) downloadYouTubeVideoViaSubprocess(
+	ctx context.Context,
+	videoURL string,
+	cookieFile string,
+	outputPath string,
+	progressCallback func(int64, int64, float64),
+) error {
+	cmd := buildYtDlpCommand(ctx, videoURL, outputPath, cookieFile)
+
+	// Log the command being run
+	cmdStr := "yt-dlp"
+	if cookieFile != "" {
+		cmdStr = fmt.Sprintf("yt-dlp --cookies %s --newline --no-playlist -f 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best' -o %s --no-mtime --no-continue %s",
+			cookieFile, outputPath, videoURL)
+	} else {
+		cmdStr = fmt.Sprintf("yt-dlp --newline --no-playlist -f 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best' -o %s --no-mtime --no-continue %s",
+			outputPath, videoURL)
+	}
+	s.logger.Info("running yt-dlp subprocess", "command", cmdStr)
+
+	// Capture stdout and stderr
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create stdout pipe: %w", err)
+	}
+
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create stderr pipe: %w", err)
+	}
+
+	// Start the command
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start yt-dlp: %w", err)
+	}
+
+	// Read stderr in background for error messages
+	stderrDone := make(chan struct{})
+	var stderrLines []string
+	go func() {
+		defer close(stderrDone)
+		scanner := bufio.NewScanner(stderr)
+		for scanner.Scan() {
+			line := scanner.Text()
+			stderrLines = append(stderrLines, line)
+			s.logger.Debug("yt-dlp stderr", "line", line)
+		}
+	}()
+
+	// Read stdout for progress
+	scanner := bufio.NewScanner(stdout)
+	var lastTotalBytes int64
+	for scanner.Scan() {
+		line := scanner.Text()
+		s.logger.Debug("yt-dlp stdout", "line", line)
+
+		// Parse progress line
+		percent, totalBytes, speed, ok := parseProgressLine(line)
+		if ok && progressCallback != nil {
+			if totalBytes > 0 {
+				lastTotalBytes = totalBytes
+			} else if lastTotalBytes > 0 {
+				totalBytes = lastTotalBytes
+			}
+
+			// Calculate bytes downloaded from percentage
+			bytesRead := int64(float64(totalBytes) * (percent / 100.0))
+
+			progressCallback(bytesRead, totalBytes, speed)
+		}
+	}
+
+	// Wait for stderr reader to finish
+	<-stderrDone
+
+	// Wait for command to complete
+	if err := cmd.Wait(); err != nil {
+		// Combine stderr for error message
+		stderrText := strings.Join(stderrLines, "\n")
+		if stderrText != "" {
+			return fmt.Errorf("yt-dlp failed: %w: %s", err, stderrText)
+		}
+		return fmt.Errorf("yt-dlp failed: %w", err)
+	}
+
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("error reading yt-dlp output: %w", err)
+	}
+
+	return nil
+}
 
 func (s *BucketService) ImportYouTube(
 	ctx context.Context,
@@ -529,64 +745,69 @@ func (s *BucketService) downloadYouTubeVideo(
 		metadata[youtubeVideoTitleMetadataKey] = video.Title
 	}
 
-	// Download the video using goutubedl
-	// We need to get the video URL again with a fresh goutubedl instance
-	// because URLs expire quickly
-	opts := goutubedl.Options{
-		Type: goutubedl.TypeSingle,
+	// Create a temporary file for downloading the video
+	tmpFile, err := os.CreateTemp("", fmt.Sprintf("youtube-video-%s-*%s", video.ID, ext))
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to create temp file: %w", err)
 	}
+	tmpPath := tmpFile.Name()
+	tmpFile.Close() // Close it so yt-dlp can write to it
+	defer os.Remove(tmpPath)
 
-	if cookieFile != "" {
-		opts.Cookies = cookieFile
-	}
-
-	// Build a URL for this specific video
+	// Build video URL
 	videoURL := fmt.Sprintf("https://www.youtube.com/watch?v=%s", video.ID)
 
-	if cookieFile != "" {
-		s.logger.Info("downloading youtube video with cookies",
-			"video_id", video.ID,
-			"title", video.Title,
-			"cookie_file", cookieFile,
-			"yt-dlp_command", fmt.Sprintf("yt-dlp --cookies %s %s", cookieFile, videoURL),
-		)
-	} else {
-		s.logger.Info("downloading youtube video without cookies",
-			"video_id", video.ID,
-			"title", video.Title,
-			"yt-dlp_command", fmt.Sprintf("yt-dlp %s", videoURL),
-		)
-	}
+	s.logger.Info("downloading youtube video via subprocess",
+		"video_id", video.ID,
+		"title", video.Title,
+		"temp_file", tmpPath,
+	)
 
-	gResult, err := goutubedl.New(ctx, videoURL, opts)
-	if err != nil {
-		return nil, false, fmt.Errorf("failed to initialize download: %w", err)
-	}
-
-	// Find the format we want
-	targetFormat := selectBestFormat(gResult.Info.Formats)
-	if targetFormat == nil {
-		return nil, false, errors.New("no suitable format found for download")
-	}
-
-	downloadResult, err := gResult.Download(ctx, targetFormat.FormatID)
-	if err != nil {
+	// Download video to temp file using yt-dlp subprocess with progress tracking
+	if err := s.downloadYouTubeVideoViaSubprocess(ctx, videoURL, cookieFile, tmpPath, progress); err != nil {
 		return nil, false, fmt.Errorf("failed to download video: %w", err)
 	}
-	defer downloadResult.Close()
 
-	// Wrap with progress reader
-	progressReader := newProgressReader(downloadResult, video.Filesize, progress)
-	defer progressReader.Close()
+	// Get file size
+	fileInfo, err := os.Stat(tmpPath)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to stat downloaded file: %w", err)
+	}
+	size := fileInfo.Size()
 
-	if err := store.PutObject(ctx, bucketName, key, progressReader, contentType, metadata); err != nil {
-		return nil, false, err
+	// Upload to storage
+	s.logger.Info("uploading video to storage",
+		"video_id", video.ID,
+		"key", key,
+		"size_bytes", size,
+	)
+
+	// Open temp file for reading
+	tmpFileRead, err := os.Open(tmpPath)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to open temp file for upload: %w", err)
+	}
+	defer tmpFileRead.Close()
+
+	// Upload with progress tracking for S3 upload phase
+	uploadProgressReader := newProgressReader(tmpFileRead, size, func(bytesRead, total int64, speed float64) {
+		// Only report upload progress if we have a callback
+		// This is the S3 upload phase, which is typically fast on local MinIO
+		if progress != nil {
+			progress(bytesRead, total, speed)
+		}
+	})
+	defer uploadProgressReader.Close()
+
+	if err := store.PutObject(ctx, bucketName, key, uploadProgressReader, contentType, metadata); err != nil {
+		return nil, false, fmt.Errorf("failed to upload to storage: %w", err)
 	}
 
-	size := progressReader.BytesRead()
-	if size == 0 && video.Filesize > 0 {
-		size = video.Filesize
-	}
+	s.logger.Info("video download and upload complete",
+		"video_id", video.ID,
+		"key", key,
+		"size_bytes", size,
+	)
 
 	return &YouTubeImportedItem{
 		Title:       video.Title,
@@ -724,7 +945,8 @@ func (p *progressReader) report(force bool) {
 		return
 	}
 	now := time.Now()
-	if !force && now.Sub(p.lastTime) < 500*time.Millisecond {
+	// Report more frequently (every 100ms instead of 500ms)
+	if !force && now.Sub(p.lastTime) < 100*time.Millisecond {
 		return
 	}
 	deltaBytes := p.read - p.lastBytes
