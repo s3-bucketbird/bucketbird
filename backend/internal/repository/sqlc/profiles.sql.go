@@ -12,7 +12,7 @@ import (
 )
 
 const getProfileByID = `-- name: GetProfileByID :one
-SELECT id, user_id, first_name, last_name, email, language, timezone, avatar_url, created_at, updated_at FROM profiles WHERE id = $1
+SELECT id, user_id, first_name, last_name, email, language, timezone, avatar_url, youtube_cookie, created_at, updated_at FROM profiles WHERE id = $1
 `
 
 func (q *Queries) GetProfileByID(ctx context.Context, id pgtype.UUID) (Profile, error) {
@@ -27,6 +27,7 @@ func (q *Queries) GetProfileByID(ctx context.Context, id pgtype.UUID) (Profile, 
 		&i.Language,
 		&i.Timezone,
 		&i.AvatarUrl,
+		&i.YoutubeCookie,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -34,7 +35,7 @@ func (q *Queries) GetProfileByID(ctx context.Context, id pgtype.UUID) (Profile, 
 }
 
 const getProfileByUserID = `-- name: GetProfileByUserID :one
-SELECT id, user_id, first_name, last_name, email, language, timezone, avatar_url, created_at, updated_at FROM profiles WHERE user_id = $1
+SELECT id, user_id, first_name, last_name, email, language, timezone, avatar_url, youtube_cookie, created_at, updated_at FROM profiles WHERE user_id = $1
 `
 
 func (q *Queries) GetProfileByUserID(ctx context.Context, userID pgtype.UUID) (Profile, error) {
@@ -49,6 +50,7 @@ func (q *Queries) GetProfileByUserID(ctx context.Context, userID pgtype.UUID) (P
 		&i.Language,
 		&i.Timezone,
 		&i.AvatarUrl,
+		&i.YoutubeCookie,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -56,8 +58,8 @@ func (q *Queries) GetProfileByUserID(ctx context.Context, userID pgtype.UUID) (P
 }
 
 const upsertProfile = `-- name: UpsertProfile :exec
-INSERT INTO profiles (id, user_id, first_name, last_name, email, language, timezone, avatar_url)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO profiles (id, user_id, first_name, last_name, email, language, timezone, avatar_url, youtube_cookie)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT (user_id) DO UPDATE SET
     first_name = EXCLUDED.first_name,
     last_name = EXCLUDED.last_name,
@@ -65,18 +67,20 @@ ON CONFLICT (user_id) DO UPDATE SET
     language = EXCLUDED.language,
     timezone = EXCLUDED.timezone,
     avatar_url = EXCLUDED.avatar_url,
+    youtube_cookie = EXCLUDED.youtube_cookie,
     updated_at = NOW()
 `
 
 type UpsertProfileParams struct {
-	ID        pgtype.UUID `json:"id"`
-	UserID    pgtype.UUID `json:"user_id"`
-	FirstName string      `json:"first_name"`
-	LastName  string      `json:"last_name"`
-	Email     string      `json:"email"`
-	Language  string      `json:"language"`
-	Timezone  string      `json:"timezone"`
-	AvatarUrl *string     `json:"avatar_url"`
+	ID            pgtype.UUID `json:"id"`
+	UserID        pgtype.UUID `json:"user_id"`
+	FirstName     string      `json:"first_name"`
+	LastName      string      `json:"last_name"`
+	Email         string      `json:"email"`
+	Language      string      `json:"language"`
+	Timezone      string      `json:"timezone"`
+	AvatarUrl     *string     `json:"avatar_url"`
+	YoutubeCookie *string     `json:"youtube_cookie"`
 }
 
 func (q *Queries) UpsertProfile(ctx context.Context, arg UpsertProfileParams) error {
@@ -89,6 +93,23 @@ func (q *Queries) UpsertProfile(ctx context.Context, arg UpsertProfileParams) er
 		arg.Language,
 		arg.Timezone,
 		arg.AvatarUrl,
+		arg.YoutubeCookie,
 	)
+	return err
+}
+
+const updateYouTubeCookie = `-- name: UpdateYouTubeCookie :exec
+UPDATE profiles
+SET youtube_cookie = $2, updated_at = NOW()
+WHERE user_id = $1
+`
+
+type UpdateYouTubeCookieParams struct {
+	UserID        pgtype.UUID `json:"user_id"`
+	YoutubeCookie *string     `json:"youtube_cookie"`
+}
+
+func (q *Queries) UpdateYouTubeCookie(ctx context.Context, arg UpdateYouTubeCookieParams) error {
+	_, err := q.db.Exec(ctx, updateYouTubeCookie, arg.UserID, arg.YoutubeCookie)
 	return err
 }

@@ -38,6 +38,7 @@ type Repositories struct {
 	Sessions    SessionRepository
 	Credentials CredentialRepository
 	Buckets     BucketRepository
+	Profiles    ProfileRepository
 }
 
 func NewRepositories(pool *pgxpool.Pool) *Repositories {
@@ -47,6 +48,7 @@ func NewRepositories(pool *pgxpool.Pool) *Repositories {
 		Sessions:    &pgSessionRepository{q: q},
 		Credentials: &pgCredentialRepository{q: q},
 		Buckets:     &pgBucketRepository{q: q},
+		Profiles:    &pgProfileRepository{q: q},
 	}
 }
 
@@ -435,10 +437,47 @@ func (r *pgBucketRepository) Delete(ctx context.Context, id, userID uuid.UUID) e
 	})
 }
 
+// ========== ProfileRepository implementation ==========
+
+type pgProfileRepository struct {
+	q *sqlc.Queries
+}
+
+func (r *pgProfileRepository) GetByUserID(ctx context.Context, userID uuid.UUID) (*Profile, error) {
+	profile, err := r.q.GetProfileByUserID(ctx, uuidToPgtype(userID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &Profile{
+		ID:            pgtypeToUUID(profile.ID),
+		UserID:        pgtypeToUUID(profile.UserID),
+		FirstName:     profile.FirstName,
+		LastName:      profile.LastName,
+		Email:         profile.Email,
+		Language:      profile.Language,
+		Timezone:      profile.Timezone,
+		AvatarURL:     profile.AvatarUrl,
+		YoutubeCookie: profile.YoutubeCookie,
+		CreatedAt:     pgtypeToTime(profile.CreatedAt),
+		UpdatedAt:     pgtypeToTime(profile.UpdatedAt),
+	}, nil
+}
+
+func (r *pgProfileRepository) UpdateYouTubeCookie(ctx context.Context, userID uuid.UUID, cookie *string) error {
+	return r.q.UpdateYouTubeCookie(ctx, sqlc.UpdateYouTubeCookieParams{
+		UserID:        uuidToPgtype(userID),
+		YoutubeCookie: cookie,
+	})
+}
+
 // Verify interface compliance
 var (
 	_ UserRepository       = (*pgUserRepository)(nil)
 	_ SessionRepository    = (*pgSessionRepository)(nil)
 	_ CredentialRepository = (*pgCredentialRepository)(nil)
 	_ BucketRepository     = (*pgBucketRepository)(nil)
+	_ ProfileRepository    = (*pgProfileRepository)(nil)
 )

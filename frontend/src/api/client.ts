@@ -264,6 +264,14 @@ type UpdatePasswordInput = {
   newPassword: string
 }
 
+type YouTubeCookieResponse = {
+  cookie: string | null
+}
+
+type UpdateYouTubeCookieInput = {
+  cookie: string | null
+}
+
 export type CreateBucketInput = {
   name: string
   region: string
@@ -570,6 +578,18 @@ export const api = {
       body: {
         currentPassword: input.currentPassword,
         newPassword: input.newPassword,
+      },
+    })
+  },
+  async getYouTubeCookie(signal?: AbortSignal) {
+    const data = await request<YouTubeCookieResponse>('/api/v1/profile/youtube-cookie', { signal })
+    return data.cookie
+  },
+  async updateYouTubeCookie(input: UpdateYouTubeCookieInput) {
+    await request<void>('/api/v1/profile/youtube-cookie', {
+      method: 'PUT',
+      body: {
+        cookie: input.cookie,
       },
     })
   },

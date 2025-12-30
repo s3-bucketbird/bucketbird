@@ -5,9 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
-	"net/http/cookiejar"
-	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -15,7 +13,7 @@ import (
 	"bucketbird/backend/internal/storage"
 
 	"github.com/google/uuid"
-	"github.com/kkdai/youtube/v2"
+	"github.com/wader/goutubedl"
 )
 
 type YouTubeImportInput struct {
@@ -98,11 +96,6 @@ func (s *BucketService) ImportYouTube(
 		return nil, err
 	}
 
-	client, err := s.getYouTubeClient(input.CookieHeader)
-	if err != nil {
-		return nil, err
-	}
-
 	result := &YouTubeImportResult{
 		Kind:   "video",
 		Items:  make([]YouTubeImportedItem, 0),
@@ -117,7 +110,29 @@ func (s *BucketService) ImportYouTube(
 		Destination: prefix,
 	})
 
-	videos, kind, err := s.resolveYouTubeVideos(ctx, client, url, result, progress)
+	// Determine which cookie to use: request cookie or stored cookie
+	cookieHeader := input.CookieHeader
+	if cookieHeader == "" {
+		// Try to get stored cookie from user profile
+		profile, err := s.profiles.GetByUserID(ctx, userID)
+		if err == nil && profile.YoutubeCookie != nil && *profile.YoutubeCookie != "" {
+			cookieHeader = *profile.YoutubeCookie
+			s.logger.Info("using stored youtube cookie for user", "user_id", userID.String())
+		}
+	}
+
+	// Create cookie file if cookies are available
+	var cookieFile string
+	if cookieHeader != "" {
+		tmpFile, err := createCookieFile(cookieHeader)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create cookie file: %w", err)
+		}
+		cookieFile = tmpFile
+		defer os.Remove(cookieFile)
+	}
+
+	videos, kind, err := s.resolveYouTubeVideos(ctx, url, cookieFile, result, progress)
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +177,7 @@ func (s *BucketService) ImportYouTube(
 			})
 		}
 
-		item, skipped, downloadErr := s.downloadYouTubeVideo(ctx, store, bucketName, prefix, client, video, progressFn)
+		item, skipped, downloadErr := s.downloadYouTubeVideo(ctx, store, bucketName, prefix, cookieFile, video, progressFn)
 		if downloadErr != nil {
 			s.logger.Warn("failed to import youtube video",
 				"title", video.Title,
@@ -245,60 +260,143 @@ func (s *BucketService) ImportYouTube(
 	return result, nil
 }
 
-func (s *BucketService) resolveYouTubeVideos(
-	ctx context.Context,
-	client *youtube.Client,
-	url string,
-	result *YouTubeImportResult,
-	progress func(YouTubeImportProgress),
-) ([]*youtube.Video, string, error) {
-	playlist, err := client.GetPlaylistContext(ctx, url)
-	if err == nil {
-		result.Kind = "playlist"
-		return s.videosFromPlaylist(ctx, client, playlist, result, progress), "playlist", nil
-	}
-
-	if !errors.Is(err, youtube.ErrInvalidPlaylist) {
-		return nil, "", fmt.Errorf("failed to load playlist: %w", err)
-	}
-
-	video, videoErr := client.GetVideoContext(ctx, url)
-	if videoErr != nil {
-		return nil, "", fmt.Errorf("failed to load video: %w", videoErr)
-	}
-
-	return []*youtube.Video{video}, "video", nil
+type videoInfo struct {
+	ID           string
+	Title        string
+	DownloadURL  string
+	Ext          string
+	Filesize     int64
+	Format       string
+	FormatID     string
+	Width        int64
+	Height       int64
+	ThumbnailURL string
 }
 
-func (s *BucketService) videosFromPlaylist(
+func (s *BucketService) resolveYouTubeVideos(
 	ctx context.Context,
-	client *youtube.Client,
-	playlist *youtube.Playlist,
+	url string,
+	cookieFile string,
 	result *YouTubeImportResult,
 	progress func(YouTubeImportProgress),
-) []*youtube.Video {
-	videos := make([]*youtube.Video, 0, len(playlist.Videos))
-	for _, entry := range playlist.Videos {
-		video, err := client.VideoFromPlaylistEntryContext(ctx, entry)
-		if err != nil {
-			s.logger.Warn("failed to load playlist entry", "video_id", entry.ID, "title", entry.Title, "error", err)
-			result.Errors = append(result.Errors, YouTubeImportError{
-				Title:   entry.Title,
-				VideoID: entry.ID,
-				Error:   err.Error(),
-			})
-			emitProgress(progress, YouTubeImportProgress{
-				Stage:      "error",
-				Kind:       "playlist",
-				VideoTitle: entry.Title,
-				VideoID:    entry.ID,
-				Error:      err.Error(),
-			})
-			continue
-		}
-		videos = append(videos, video)
+) ([]*videoInfo, string, error) {
+	opts := goutubedl.Options{
+		Type: goutubedl.TypeAny,
 	}
-	return videos
+
+	if cookieFile != "" {
+		opts.Cookies = cookieFile
+	}
+
+	gResult, err := goutubedl.New(ctx, url, opts)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to resolve youtube url: %w", err)
+	}
+
+	info := gResult.Info
+
+	// Check if it's a playlist or single video
+	kind := "video"
+	var videos []*videoInfo
+
+	if info.Entries != nil && len(info.Entries) > 0 {
+		// It's a playlist
+		kind = "playlist"
+		for _, entry := range info.Entries {
+			if entry.ID == "" {
+				continue
+			}
+
+			// Select best format with both video and audio
+			format := selectBestFormat(entry.Formats)
+			if format == nil {
+				s.logger.Warn("no suitable format found", "video_id", entry.ID, "title", entry.Title)
+				result.Errors = append(result.Errors, YouTubeImportError{
+					Title:   entry.Title,
+					VideoID: entry.ID,
+					Error:   "no downloadable format found",
+				})
+				continue
+			}
+
+			videos = append(videos, &videoInfo{
+				ID:           entry.ID,
+				Title:        entry.Title,
+				DownloadURL:  "", // Will be handled by goutubedl.Download()
+				Ext:          format.Ext,
+				Filesize:     int64(format.Filesize),
+				Format:       format.Format,
+				FormatID:     format.FormatID,
+				Width:        int64(format.Width),
+				Height:       int64(format.Height),
+				ThumbnailURL: entry.Thumbnail,
+			})
+		}
+	} else {
+		// Single video
+		format := selectBestFormat(info.Formats)
+		if format == nil {
+			return nil, "", errors.New("no downloadable format found")
+		}
+
+		videos = append(videos, &videoInfo{
+			ID:           info.ID,
+			Title:        info.Title,
+			DownloadURL:  "", // Will be handled by goutubedl.Download()
+			Ext:          format.Ext,
+			Filesize:     int64(format.Filesize),
+			Format:       format.Format,
+			FormatID:     format.FormatID,
+			Width:        int64(format.Width),
+			Height:       int64(format.Height),
+			ThumbnailURL: info.Thumbnail,
+		})
+	}
+
+	return videos, kind, nil
+}
+
+func selectBestFormat(formats []goutubedl.Format) *goutubedl.Format {
+	if len(formats) == 0 {
+		return nil
+	}
+
+	// Prefer formats with both audio and video (acodec and vcodec present)
+	var bestFormat *goutubedl.Format
+	var bestScore int64
+
+	for i := range formats {
+		format := &formats[i]
+
+		// Prefer mp4 container
+		score := int64(0)
+		if format.Ext == "mp4" {
+			score += 1000000
+		}
+
+		// Prefer formats with both audio and video
+		hasAudio := format.ACodec != "" && format.ACodec != "none"
+		hasVideo := format.VCodec != "" && format.VCodec != "none"
+
+		if hasAudio && hasVideo {
+			score += 10000000
+		}
+
+		// Add resolution score
+		score += int64(format.Width * format.Height)
+
+		// Add filesize as tiebreaker (prefer larger = better quality)
+		if format.Filesize > 0 {
+			score += int64(format.Filesize) / 1000000 // MB
+		}
+
+		if bestFormat == nil || score > bestScore {
+			bestFormat = format
+			bestScore = score
+		}
+	}
+
+	return bestFormat
 }
 
 func (s *BucketService) downloadYouTubeVideo(
@@ -306,38 +404,40 @@ func (s *BucketService) downloadYouTubeVideo(
 	store *storage.ObjectStore,
 	bucketName string,
 	prefix string,
-	client *youtube.Client,
-	video *youtube.Video,
+	cookieFile string,
+	video *videoInfo,
 	progress func(int64, int64, float64),
 ) (*YouTubeImportedItem, bool, error) {
-	format, err := selectYouTubeFormat(video)
-	if err != nil {
-		return nil, false, err
+	// Determine content type and extension
+	contentType := "video/mp4"
+	ext := ".mp4"
+	if video.Ext != "" {
+		ext = "." + video.Ext
+		switch video.Ext {
+		case "mp4":
+			contentType = "video/mp4"
+		case "webm":
+			contentType = "video/webm"
+		case "m4a":
+			contentType = "audio/mp4"
+		default:
+			contentType = "application/octet-stream"
+		}
 	}
 
-	stream, sizeHint, err := client.GetStreamContext(ctx, video, format)
-	if err != nil {
-		return nil, false, err
-	}
-	defer stream.Close()
-
-	if format.ContentLength == 0 && sizeHint > 0 {
-		format.ContentLength = sizeHint
-	}
-
-	contentType := contentTypeFromMime(format.MimeType)
-	primaryFilename := buildYouTubeFilename(video.Title, format)
+	primaryFilename := buildYouTubeFilename(video.Title, ext)
 	primaryKey := primaryFilename
 	if prefix != "" {
 		primaryKey = prefix + primaryFilename
 	}
 
-	legacyFilename := buildYouTubeFilenameWithID(video.Title, video.ID, format)
+	legacyFilename := buildYouTubeFilenameWithID(video.Title, video.ID, ext)
 	legacyKey := legacyFilename
 	if prefix != "" {
 		legacyKey = prefix + legacyFilename
 	}
 
+	// Check if file already exists
 	primaryHead, err := store.HeadObject(ctx, bucketName, primaryKey)
 	if err != nil && !isNotFoundError(err) {
 		return nil, false, err
@@ -369,8 +469,7 @@ func (s *BucketService) downloadYouTubeVideo(
 
 	key := primaryKey
 	if primaryHead != nil {
-		// A file already exists with the desired title, fall back to the legacy naming that
-		// includes the video ID to avoid overwriting unrelated content.
+		// A file already exists with the desired title, fall back to the legacy naming
 		key = legacyKey
 	}
 
@@ -381,7 +480,38 @@ func (s *BucketService) downloadYouTubeVideo(
 		metadata[youtubeVideoTitleMetadataKey] = video.Title
 	}
 
-	progressReader := newProgressReader(stream, format.ContentLength, progress)
+	// Download the video using goutubedl
+	// We need to get the video URL again with a fresh goutubedl instance
+	// because URLs expire quickly
+	opts := goutubedl.Options{
+		Type: goutubedl.TypeSingle,
+	}
+
+	if cookieFile != "" {
+		opts.Cookies = cookieFile
+	}
+
+	// Build a URL for this specific video
+	videoURL := fmt.Sprintf("https://www.youtube.com/watch?v=%s", video.ID)
+	gResult, err := goutubedl.New(ctx, videoURL, opts)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to initialize download: %w", err)
+	}
+
+	// Find the format we want
+	targetFormat := selectBestFormat(gResult.Info.Formats)
+	if targetFormat == nil {
+		return nil, false, errors.New("no suitable format found for download")
+	}
+
+	downloadResult, err := gResult.Download(ctx, targetFormat.FormatID)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to download video: %w", err)
+	}
+	defer downloadResult.Close()
+
+	// Wrap with progress reader
+	progressReader := newProgressReader(downloadResult, video.Filesize, progress)
 	defer progressReader.Close()
 
 	if err := store.PutObject(ctx, bucketName, key, progressReader, contentType, metadata); err != nil {
@@ -389,8 +519,8 @@ func (s *BucketService) downloadYouTubeVideo(
 	}
 
 	size := progressReader.BytesRead()
-	if size == 0 && format.ContentLength > 0 {
-		size = format.ContentLength
+	if size == 0 && video.Filesize > 0 {
+		size = video.Filesize
 	}
 
 	return &YouTubeImportedItem{
@@ -402,39 +532,14 @@ func (s *BucketService) downloadYouTubeVideo(
 	}, false, nil
 }
 
-func selectYouTubeFormat(video *youtube.Video) (*youtube.Format, error) {
-	withAudio := video.Formats.WithAudioChannels()
-	if len(withAudio) == 0 {
-		return nil, fmt.Errorf("no downloadable formats with audio were found")
-	}
-
-	var mp4Formats youtube.FormatList
-	for _, format := range withAudio {
-		if strings.Contains(format.MimeType, "mp4") {
-			mp4Formats = append(mp4Formats, format)
-		}
-	}
-
-	candidate := withAudio
-	if len(mp4Formats) > 0 {
-		mp4Formats.Sort()
-		candidate = mp4Formats
-	} else {
-		candidate.Sort()
-	}
-
-	selected := candidate[0]
-	return &selected, nil
+func buildYouTubeFilename(title, ext string) string {
+	name := buildYouTubeBaseName(title)
+	return fmt.Sprintf("%s%s", name, ext)
 }
 
-func buildYouTubeFilename(title string, format *youtube.Format) string {
+func buildYouTubeFilenameWithID(title, videoID, ext string) string {
 	name := buildYouTubeBaseName(title)
-	return fmt.Sprintf("%s%s", name, extensionFromMime(format.MimeType))
-}
-
-func buildYouTubeFilenameWithID(title, videoID string, format *youtube.Format) string {
-	name := buildYouTubeBaseName(title)
-	return fmt.Sprintf("%s-%s%s", name, videoID, extensionFromMime(format.MimeType))
+	return fmt.Sprintf("%s-%s%s", name, videoID, ext)
 }
 
 func buildYouTubeBaseName(title string) string {
@@ -469,26 +574,6 @@ func metadataMatchesYouTubeVideo(metadata map[string]string, videoID string) boo
 	return false
 }
 
-func extensionFromMime(mimeType string) string {
-	switch {
-	case strings.Contains(mimeType, "audio/mp4"):
-		return ".m4a"
-	case strings.Contains(mimeType, "mp4"):
-		return ".mp4"
-	case strings.Contains(mimeType, "webm"):
-		return ".webm"
-	default:
-		return ".bin"
-	}
-}
-
-func contentTypeFromMime(mimeType string) string {
-	if idx := strings.Index(mimeType, ";"); idx > -1 {
-		mimeType = mimeType[:idx]
-	}
-	return strings.TrimSpace(mimeType)
-}
-
 func normalizeObjectPrefix(prefix string) string {
 	prefix = strings.TrimSpace(prefix)
 	prefix = strings.TrimPrefix(prefix, "/")
@@ -507,68 +592,54 @@ func emitProgress(progress func(YouTubeImportProgress), event YouTubeImportProgr
 	progress(event)
 }
 
-func (s *BucketService) getYouTubeClient(cookieHeader string) (*youtube.Client, error) {
-	header := strings.TrimSpace(cookieHeader)
-	if header == "" {
-		if s.youtubeClient == nil {
-			s.youtubeClient = &youtube.Client{}
-		}
-		return s.youtubeClient, nil
-	}
-
-	cookies := parseCookieHeader(header)
-	if len(cookies) == 0 {
-		return nil, fmt.Errorf("no valid cookies found in header")
-	}
-
-	jar, err := cookiejar.New(nil)
+func createCookieFile(cookieHeader string) (string, error) {
+	// Create a temporary file for Netscape cookie format
+	tmpFile, err := os.CreateTemp("", "youtube-cookies-*.txt")
 	if err != nil {
-		return nil, fmt.Errorf("failed to create cookie jar: %w", err)
+		return "", err
+	}
+	defer tmpFile.Close()
+
+	// Write Netscape cookie file header
+	_, err = tmpFile.WriteString("# Netscape HTTP Cookie File\n")
+	if err != nil {
+		return "", err
 	}
 
-	targets := []string{
-		"https://www.youtube.com",
-		"https://m.youtube.com",
-		"https://www.google.com",
-		"https://www.googlevideo.com",
-	}
-
-	for _, target := range targets {
-		u, err := url.Parse(target)
-		if err != nil {
+	// Parse cookie header and convert to Netscape format
+	cookies := strings.Split(cookieHeader, ";")
+	for _, cookie := range cookies {
+		cookie = strings.TrimSpace(cookie)
+		if cookie == "" {
 			continue
 		}
-		jar.SetCookies(u, cookies)
-	}
 
-	return &youtube.Client{
-		HTTPClient: &http.Client{Jar: jar},
-	}, nil
-}
-
-func parseCookieHeader(header string) []*http.Cookie {
-	segments := strings.Split(header, ";")
-	cookies := make([]*http.Cookie, 0, len(segments))
-	for _, segment := range segments {
-		part := strings.TrimSpace(segment)
-		if part == "" {
+		parts := strings.SplitN(cookie, "=", 2)
+		if len(parts) != 2 {
 			continue
 		}
-		kv := strings.SplitN(part, "=", 2)
-		name := strings.TrimSpace(kv[0])
+
+		name := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+
 		if name == "" {
 			continue
 		}
-		value := ""
-		if len(kv) == 2 {
-			value = strings.TrimSpace(kv[1])
+
+		// Netscape format: domain	flag	path	secure	expiration	name	value
+		// Using .youtube.com to make cookies work for all YouTube domains
+		line := fmt.Sprintf(".youtube.com\tTRUE\t/\tTRUE\t%d\t%s\t%s\n",
+			time.Now().Add(365*24*time.Hour).Unix(), // Expire in 1 year
+			name,
+			value,
+		)
+		_, err = tmpFile.WriteString(line)
+		if err != nil {
+			return "", err
 		}
-		cookies = append(cookies, &http.Cookie{
-			Name:  name,
-			Value: value,
-		})
 	}
-	return cookies
+
+	return tmpFile.Name(), nil
 }
 
 func isNotFoundError(err error) bool {

@@ -10,12 +10,14 @@ import (
 )
 
 type ProfileService struct {
-	users repository.UserRepository
+	users    repository.UserRepository
+	profiles repository.ProfileRepository
 }
 
-func NewProfileService(users repository.UserRepository) *ProfileService {
+func NewProfileService(users repository.UserRepository, profiles repository.ProfileRepository) *ProfileService {
 	return &ProfileService{
-		users: users,
+		users:    users,
+		profiles: profiles,
 	}
 }
 
@@ -83,4 +85,16 @@ func (s *ProfileService) UpdatePassword(ctx context.Context, userID uuid.UUID, c
 
 	// Update password
 	return s.users.UpdatePassword(ctx, userID, newHash)
+}
+
+func (s *ProfileService) GetYouTubeCookie(ctx context.Context, userID uuid.UUID) (*string, error) {
+	profile, err := s.profiles.GetByUserID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	return profile.YoutubeCookie, nil
+}
+
+func (s *ProfileService) UpdateYouTubeCookie(ctx context.Context, userID uuid.UUID, cookie *string) error {
+	return s.profiles.UpdateYouTubeCookie(ctx, userID, cookie)
 }

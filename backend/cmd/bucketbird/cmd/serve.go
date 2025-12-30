@@ -80,6 +80,7 @@ func runServe(cmd *cobra.Command, args []string) {
 		repos.Buckets,
 		repos.Credentials,
 		repos.Users,
+		repos.Profiles,
 		cfg.EncryptionKey,
 		logger,
 	)
@@ -90,7 +91,7 @@ func runServe(cmd *cobra.Command, args []string) {
 		logger,
 	)
 
-	profileService := service.NewProfileService(repos.Users)
+	profileService := service.NewProfileService(repos.Users, repos.Profiles)
 
 	// Initialize HTTP handlers
 	authHandler := auth.NewHandler(authService, logger, cfg.CookieSecure, cfg.EnableDemoLogin)
@@ -148,6 +149,8 @@ func runServe(cmd *cobra.Command, args []string) {
 		r.Get("/profile", profileHandler.Get)
 		r.Put("/profile", profileHandler.Update)
 		r.Put("/profile/password", profileHandler.UpdatePassword)
+		r.Get("/profile/youtube-cookie", profileHandler.GetYouTubeCookie)
+		r.Put("/profile/youtube-cookie", profileHandler.UpdateYouTubeCookie)
 
 		// Bucket routes
 		r.Route("/buckets", func(r chi.Router) {

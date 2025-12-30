@@ -37,16 +37,17 @@ type Credential struct {
 }
 
 type Profile struct {
-	ID        pgtype.UUID        `json:"id"`
-	UserID    pgtype.UUID        `json:"user_id"`
-	FirstName string             `json:"first_name"`
-	LastName  string             `json:"last_name"`
-	Email     string             `json:"email"`
-	Language  string             `json:"language"`
-	Timezone  string             `json:"timezone"`
-	AvatarUrl *string            `json:"avatar_url"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+	ID            pgtype.UUID        `json:"id"`
+	UserID        pgtype.UUID        `json:"user_id"`
+	FirstName     string             `json:"first_name"`
+	LastName      string             `json:"last_name"`
+	Email         string             `json:"email"`
+	Language      string             `json:"language"`
+	Timezone      string             `json:"timezone"`
+	AvatarUrl     *string            `json:"avatar_url"`
+	YoutubeCookie *string            `json:"youtube_cookie"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Session struct {

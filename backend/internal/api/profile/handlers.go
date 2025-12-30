@@ -124,6 +124,53 @@ func (h *Handler) UpdatePassword(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+type GetYouTubeCookieResponse struct {
+	Cookie *string `json:"cookie"`
+}
+
+func (h *Handler) GetYouTubeCookie(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.GetUserIDFromContext(r.Context())
+	if !ok {
+		h.respondError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	cookie, err := h.profileService.GetYouTubeCookie(r.Context(), userID)
+	if err != nil {
+		h.logger.Error("failed to get youtube cookie", slog.Any("error", err))
+		h.respondError(w, "Failed to get YouTube cookie", http.StatusInternalServerError)
+		return
+	}
+
+	h.respondJSON(w, GetYouTubeCookieResponse{Cookie: cookie}, http.StatusOK)
+}
+
+type UpdateYouTubeCookieRequest struct {
+	Cookie *string `json:"cookie"`
+}
+
+func (h *Handler) UpdateYouTubeCookie(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.GetUserIDFromContext(r.Context())
+	if !ok {
+		h.respondError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var req UpdateYouTubeCookieRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.respondError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.profileService.UpdateYouTubeCookie(r.Context(), userID, req.Cookie); err != nil {
+		h.logger.Error("failed to update youtube cookie", slog.Any("error", err))
+		h.respondError(w, "Failed to update YouTube cookie", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *Handler) respondJSON(w http.ResponseWriter, data interface{}, status int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

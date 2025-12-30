@@ -1863,8 +1863,8 @@ const BucketPage = () => {
                       className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-500"
                     />
                     <p className="text-xs leading-relaxed text-slate-500 dark:text-slate-400">
-                      Required only for age-restricted or blocked videos. We never store this value; it is sent with this import request
-                      so YouTube treats the download like your signed-in browser session.
+                      Required only for age-restricted or blocked videos. Leave blank to use your stored cookie from Settings,
+                      or paste here to use a different one for this import.
                     </p>
                   </div>
                 )}

@@ -7,7 +7,7 @@ import ConfirmDialog from '../components/ui/ConfirmDialog'
 import CredentialCard from '../components/credentials/CredentialCard'
 import CredentialForm from '../components/credentials/CredentialForm'
 import { useCredentials } from '../hooks/useCredentials'
-import { useProfile, useUpdatePassword, useUpdateProfile } from '../hooks/useProfile'
+import { useProfile, useUpdatePassword, useUpdateProfile, useYouTubeCookie, useUpdateYouTubeCookie } from '../hooks/useProfile'
 import {
   useCreateCredential,
   useUpdateCredential,
@@ -54,6 +54,9 @@ const SettingsPage = () => {
   })
   const [passwordError, setPasswordError] = useState<string | null>(null)
   const [passwordSuccess, setPasswordSuccess] = useState<string | null>(null)
+  const [youtubeCookie, setYoutubeCookie] = useState<string>('')
+  const [youtubeCookieError, setYoutubeCookieError] = useState<string | null>(null)
+  const [youtubeCookieSuccess, setYoutubeCookieSuccess] = useState<string | null>(null)
 
   const {
     data: profile,
@@ -71,6 +74,8 @@ const SettingsPage = () => {
 
   const updateProfileMutation = useUpdateProfile()
   const updatePasswordMutation = useUpdatePassword()
+  const { data: storedYoutubeCookie } = useYouTubeCookie()
+  const updateYoutubeCookieMutation = useUpdateYouTubeCookie()
 
   useEffect(() => {
     if (profile) {
@@ -83,6 +88,12 @@ const SettingsPage = () => {
       setProfileSaveError(null)
     }
   }, [profile])
+
+  useEffect(() => {
+    if (storedYoutubeCookie !== undefined) {
+      setYoutubeCookie(storedYoutubeCookie ?? '')
+    }
+  }, [storedYoutubeCookie])
 
   const createMutation = useCreateCredential()
   const updateMutation = useUpdateCredential()
@@ -177,6 +188,23 @@ const SettingsPage = () => {
       setTimeout(() => setPasswordSuccess(null), 4000)
     } catch (error) {
       setPasswordError((error as Error).message)
+    }
+  }
+
+  const handleYouTubeCookieSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setYoutubeCookieError(null)
+    setYoutubeCookieSuccess(null)
+
+    try {
+      await updateYoutubeCookieMutation.mutateAsync({
+        cookie: youtubeCookie.trim() || null,
+      })
+
+      setYoutubeCookieSuccess('YouTube cookie updated successfully.')
+      setTimeout(() => setYoutubeCookieSuccess(null), 4000)
+    } catch (error) {
+      setYoutubeCookieError((error as Error).message)
     }
   }
 
@@ -534,6 +562,72 @@ const SettingsPage = () => {
                 </Button>
                 <Button type="submit" disabled={updatePasswordMutation.isPending}>
                   {updatePasswordMutation.isPending ? 'Updating…' : 'Update password'}
+                </Button>
+              </div>
+            </form>
+          </section>
+
+          <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
+            <form className="flex flex-col gap-6" onSubmit={handleYouTubeCookieSubmit}>
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
+                  YouTube cookie
+                </h2>
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  Store your YouTube authentication cookie to import private or age-restricted videos.
+                </p>
+              </div>
+
+              {youtubeCookieError && (
+                <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-600 dark:border-red-500/50 dark:bg-red-500/10 dark:text-red-200">
+                  {youtubeCookieError}
+                </div>
+              )}
+
+              {youtubeCookieSuccess && (
+                <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-700 dark:border-green-500/50 dark:bg-green-500/10 dark:text-green-200">
+                  {youtubeCookieSuccess}
+                </div>
+              )}
+
+              <label className="flex flex-col gap-2">
+                <span className="text-sm font-medium text-slate-800 dark:text-slate-200">
+                  Cookie header
+                </span>
+                <textarea
+                  value={youtubeCookie}
+                  onChange={(e) => {
+                    setYoutubeCookie(e.target.value)
+                    setYoutubeCookieError(null)
+                    setYoutubeCookieSuccess(null)
+                  }}
+                  placeholder="Paste your YouTube cookie string here (optional)"
+                  rows={4}
+                  className="form-input rounded-lg border border-slate-300 bg-background-light px-3.5 py-2.5 text-slate-900 placeholder:text-slate-400 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 dark:border-slate-700 dark:bg-background-dark dark:text-white dark:placeholder:text-slate-500"
+                />
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  This cookie will be automatically used when importing YouTube content. Leave blank to remove.
+                  The cookie is securely stored and only used for YouTube imports.
+                </p>
+              </label>
+
+              <div className="flex justify-end gap-3">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    setYoutubeCookie(storedYoutubeCookie ?? '')
+                    setYoutubeCookieError(null)
+                    setYoutubeCookieSuccess(null)
+                    updateYoutubeCookieMutation.reset()
+                  }}
+                  disabled={updateYoutubeCookieMutation.isPending}
+                  className="border-slate-300 text-slate-700 dark:border-slate-700 dark:text-white"
+                >
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={updateYoutubeCookieMutation.isPending}>
+                  {updateYoutubeCookieMutation.isPending ? 'Saving…' : 'Save cookie'}
                 </Button>
               </div>
             </form>

@@ -16,6 +16,12 @@ RUN CGO_ENABLED=0 GOOS=linux go install -tags 'postgres' github.com/golang-migra
 FROM alpine:3.20
 WORKDIR /app
 
+# Install Python3, pip, and yt-dlp (architecture will be handled automatically by apk/pip)
+RUN apk add --no-cache python3 py3-pip ffmpeg && \
+    pip3 install --no-cache-dir --break-system-packages yt-dlp && \
+    # Verify installation
+    yt-dlp --version
+
 # Copy application binary and migrate tool
 COPY --from=builder /out/bucketbird /app/bucketbird
 COPY --from=builder /out/migrate /usr/local/bin/migrate

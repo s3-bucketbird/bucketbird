@@ -26,4 +26,22 @@ export const useUpdatePassword = () => {
   })
 }
 
+export const useYouTubeCookie = () => {
+  return useQuery({
+    queryKey: ['youtube-cookie'],
+    queryFn: ({ signal }) => api.getYouTubeCookie(signal),
+  })
+}
+
+export const useUpdateYouTubeCookie = () => {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (input: Parameters<typeof api.updateYouTubeCookie>[0]) => api.updateYouTubeCookie(input),
+    onSuccess: (_, variables) => {
+      queryClient.setQueryData(['youtube-cookie'], variables.cookie)
+    },
+  })
+}
+
 export default useProfile

@@ -46,6 +46,12 @@ type BucketRepository interface {
 	Delete(ctx context.Context, id, userID uuid.UUID) error
 }
 
+// ProfileRepository defines operations for profile management
+type ProfileRepository interface {
+	GetByUserID(ctx context.Context, userID uuid.UUID) (*Profile, error)
+	UpdateYouTubeCookie(ctx context.Context, userID uuid.UUID, cookie *string) error
+}
+
 // Domain models (converted from pgtype to standard types)
 type User struct {
 	ID           uuid.UUID
@@ -99,4 +105,18 @@ type BucketWithCredential struct {
 	Bucket
 	CredentialName     string
 	CredentialProvider string
+}
+
+type Profile struct {
+	ID            uuid.UUID
+	UserID        uuid.UUID
+	FirstName     string
+	LastName      string
+	Email         string
+	Language      string
+	Timezone      string
+	AvatarURL     *string
+	YoutubeCookie *string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
