@@ -99,9 +99,13 @@ func (q *Queries) UpsertProfile(ctx context.Context, arg UpsertProfileParams) er
 }
 
 const updateYouTubeCookie = `-- name: UpdateYouTubeCookie :exec
-UPDATE profiles
-SET youtube_cookie = $2, updated_at = NOW()
-WHERE user_id = $1
+INSERT INTO profiles (id, user_id, first_name, last_name, email, language, timezone, avatar_url, youtube_cookie)
+SELECT gen_random_uuid(), $1, u.first_name, u.last_name, u.email, 'en', 'UTC', NULL, $2
+FROM users u
+WHERE u.id = $1
+ON CONFLICT (user_id) DO UPDATE SET
+    youtube_cookie = EXCLUDED.youtube_cookie,
+    updated_at = NOW()
 `
 
 type UpdateYouTubeCookieParams struct {

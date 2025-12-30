@@ -114,16 +114,35 @@ func (s *BucketService) ImportYouTube(
 	cookieHeader := input.CookieHeader
 	cookieSource := "request"
 	if cookieHeader == "" {
+		s.logger.Info("no cookie in request, checking profile",
+			"user_id", userID.String(),
+		)
 		// Try to get stored cookie from user profile
 		profile, err := s.profiles.GetByUserID(ctx, userID)
-		if err == nil && profile.YoutubeCookie != nil && *profile.YoutubeCookie != "" {
-			cookieHeader = *profile.YoutubeCookie
-			cookieSource = "profile"
-			s.logger.Info("using stored youtube cookie for user",
+		if err != nil {
+			s.logger.Warn("failed to get profile for youtube cookie",
 				"user_id", userID.String(),
-				"cookie_length", len(cookieHeader),
+				"error", err.Error(),
 			)
+		} else {
+			s.logger.Info("profile retrieved",
+				"user_id", userID.String(),
+				"has_youtube_cookie", profile.YoutubeCookie != nil,
+				"youtube_cookie_empty", profile.YoutubeCookie == nil || *profile.YoutubeCookie == "",
+			)
+			if profile.YoutubeCookie != nil && *profile.YoutubeCookie != "" {
+				cookieHeader = *profile.YoutubeCookie
+				cookieSource = "profile"
+				s.logger.Info("using stored youtube cookie for user",
+					"user_id", userID.String(),
+					"cookie_length", len(cookieHeader),
+				)
+			}
 		}
+	} else {
+		s.logger.Info("using cookie from request",
+			"cookie_length", len(cookieHeader),
+		)
 	}
 
 	// Create cookie file if cookies are available
